@@ -41,6 +41,15 @@ fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D:
     Option::<String>::deserialize(d).map(Some)
 }
 
+/// Exactly one of `before` or `after` must be set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MoveTicket {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<i64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ListTickets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +93,11 @@ impl Client {
 
     pub async fn update_ticket(&self, id: i64, req: &UpdateTicket) -> Result<Ticket, Error> {
         let r = self.http.patch(format!("{}/tickets/{id}", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn move_ticket(&self, id: i64, req: &MoveTicket) -> Result<Ticket, Error> {
+        let r = self.http.post(format!("{}/tickets/{id}/move", self.base)).bearer_auth(&self.token).json(req);
         Self::send(r).await
     }
 

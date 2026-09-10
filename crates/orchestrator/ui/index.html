@@ -8,6 +8,7 @@
   td, th { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #ddd; }
   tbody tr { cursor: pointer; }
   tbody tr:hover { background: #f4f4f4; }
+  tbody td:first-child { white-space: nowrap; padding: 0; }
   form { display: grid; gap: .5rem; margin-bottom: 1rem; }
   input, textarea, select { font: inherit; padding: .3rem; }
   #filter { margin-bottom: .5rem; }
@@ -23,7 +24,7 @@
   </form>
   <label id="filter">State <select id="state-filter"><option value="">all</option></select></label>
   <table>
-    <thead><tr><th>#</th><th>Title</th><th>State</th><th>Rank</th><th>Assignee</th></tr></thead>
+    <thead><tr><th></th><th>#</th><th>Title</th><th>State</th><th>Rank</th><th>Assignee</th></tr></thead>
     <tbody id="tickets"></tbody>
   </table>
 </section>
@@ -46,12 +47,28 @@
     const tbody = document.getElementById("tickets");
     tbody.replaceChildren();
     const state = document.getElementById("state-filter").value;
-    for (const t of await api("/tickets" + (state ? "?state=" + state : ""))) {
+    const tickets = await api("/tickets" + (state ? "?state=" + state : ""));
+    tickets.forEach((t, i) => {
       const tr = el("tr");
+      const arrows = el("td");
+      arrows.append(moveButton("\u2191", tickets[i - 1] && { before: tickets[i - 1].id }, t.id),
+                    moveButton("\u2193", tickets[i + 1] && { after: tickets[i + 1].id }, t.id));
+      tr.append(arrows);
       for (const v of [t.id, t.title, t.state, t.rank, t.assignee ?? ""]) tr.append(el("td", v));
       tr.onclick = () => show(t.id);
       tbody.append(tr);
-    }
+    });
+  }
+
+  function moveButton(label, body, id) {
+    const b = el("button", label);
+    b.disabled = !body;
+    b.onclick = async e => {
+      e.stopPropagation();
+      await api("/tickets/" + id + "/move", { method: "POST", body: JSON.stringify(body) }).catch(e => alert(e.message));
+      list();
+    };
+    return b;
   }
 
   async function show(id) {

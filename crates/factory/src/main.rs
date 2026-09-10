@@ -1,4 +1,4 @@
-use api_client::{Client, CreateTicket, ListTickets, Ticket, UpdateTicket};
+use api_client::{Client, CreateTicket, ListTickets, MoveTicket, Ticket, UpdateTicket};
 use clap::{Parser, Subcommand};
 
 /// CLI for the Software Factory orchestrator.
@@ -59,6 +59,14 @@ enum TicketCommand {
         #[arg(long = "add-link", value_name = "URL")]
         add_link: Vec<String>,
     },
+    /// Move a ticket before or after another
+    Move {
+        id: i64,
+        #[arg(long, value_name = "ID", conflicts_with = "after", required_unless_present = "after")]
+        before: Option<i64>,
+        #[arg(long, value_name = "ID")]
+        after: Option<i64>,
+    },
 }
 
 #[tokio::main]
@@ -88,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
                 let assignee = if clear_assignee { Some(None) } else { assignee.map(Some) };
                 print(&client.update_ticket(id, &UpdateTicket { title, description, state, assignee, links }).await?)
             }
+            TicketCommand::Move { id, before, after } => print(&client.move_ticket(id, &MoveTicket { before, after }).await?),
         },
     }
     Ok(())

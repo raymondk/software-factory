@@ -1,20 +1,24 @@
-use api_client::{CreateTicket, ListTickets, Ticket, UpdateTicket};
+use api_client::{CreateTicket, ListTickets, MoveTicket, Ticket, UpdateTicket};
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
+use sqlx::Connection;
 
 use crate::AppState;
 
 const UI: &str = include_str!("../ui/index.html");
+/// Neighbouring ranks closer than this trigger renormalization.
+const MIN_GAP: f64 = 1e-6;
 const STATES: [&str; 6] = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
 
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/tickets", get(list_tickets).post(create_ticket))
         .route("/tickets/{id}", get(get_ticket).patch(update_ticket))
+        .route("/tickets/{id}/move", post(move_ticket))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().route("/", get(ui)).merge(api).with_state(state)
 }
@@ -128,6 +132,53 @@ async fn update_ticket(State(state): State<AppState>, Path(id): Path<i64>, Json(
     .fetch_optional(&state.pool)
     .await?;
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
+}
+
+async fn move_ticket(State(state): State<AppState>, Path(id): Path<i64>, Json(req): Json<MoveTicket>) -> Result<Json<Ticket>, ApiError> {
+    let (target, before) = match (req.before, req.after) {
+        (Some(t), None) => (t, true),
+        (None, Some(t)) => (t, false),
+        _ => return Err(ApiError::BadRequest("exactly one of before or after is required")),
+    };
+    if target == id {
+        return Err(ApiError::BadRequest("cannot move a ticket relative to itself"));
+    }
+    let mut conn = state.pool.acquire().await?;
+    // IMMEDIATE takes the write lock up front so concurrent moves see each other's ranks.
+    let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
+    let mut order: Vec<(i64, f64)> = sqlx::query_as("SELECT id, rank FROM tickets ORDER BY rank ASC, id ASC").fetch_all(&mut *tx).await?;
+    if !order.iter().any(|(i, _)| *i == id) || !order.iter().any(|(i, _)| *i == target) {
+        return Err(ApiError::NotFound);
+    }
+    // Ranks bounding the slot, with the moved ticket taken out of the order.
+    let gap = |order: &[(i64, f64)]| {
+        let rest: Vec<f64> = order.iter().filter(|(i, _)| *i != id).map(|(_, r)| *r).collect();
+        let pos = order.iter().filter(|(i, _)| *i != id).position(|(i, _)| *i == target).unwrap();
+        if before { (pos.checked_sub(1).map(|p| rest[p]), Some(rest[pos])) } else { (Some(rest[pos]), rest.get(pos + 1).copied()) }
+    };
+    let (mut lo, mut hi) = gap(&order);
+    if matches!((lo, hi), (Some(lo), Some(hi)) if hi - lo < MIN_GAP) {
+        sqlx::query(
+            "UPDATE tickets SET rank = (SELECT rn FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY rank ASC, id ASC) AS rn FROM tickets) r WHERE r.id = tickets.id)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        order = sqlx::query_as("SELECT id, rank FROM tickets ORDER BY rank ASC, id ASC").fetch_all(&mut *tx).await?;
+        (lo, hi) = gap(&order);
+    }
+    let rank = match (lo, hi) {
+        (Some(lo), Some(hi)) => (lo + hi) / 2.0,
+        (None, Some(hi)) => hi - 1.0,
+        (Some(lo), None) => lo + 1.0,
+        (None, None) => unreachable!(),
+    };
+    let row: Row = sqlx::query_as(&format!("UPDATE tickets SET rank = ?2, updated_at = {NOW} WHERE id = ?1 RETURNING {COLUMNS}"))
+        .bind(id)
+        .bind(rank)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Json(row.into()))
 }
 
 pub enum ApiError {

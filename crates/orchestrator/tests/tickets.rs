@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use api_client::{Client, CreateTicket, Error, ListTickets, UpdateTicket};
+use api_client::{Client, CreateTicket, Error, ListTickets, MoveTicket, UpdateTicket};
 use orchestrator::{api, db, AppState};
 
 const TOKEN: &str = "secret";
@@ -175,4 +175,98 @@ async fn list_filters() {
     assert_eq!(ids(client.list_tickets(&by(None, Some("w1"))).await.unwrap()), vec![c.id]);
     assert_eq!(ids(client.list_tickets(&by(Some("ready"), Some("w2"))).await.unwrap()), Vec::<i64>::new());
     assert_eq!(ids(client.list_tickets(&by(None, None)).await.unwrap()), vec![a.id, b.id, c.id]);
+}
+
+fn before(id: i64) -> MoveTicket {
+    MoveTicket { before: Some(id), ..Default::default() }
+}
+
+fn after(id: i64) -> MoveTicket {
+    MoveTicket { after: Some(id), ..Default::default() }
+}
+
+async fn order(client: &Client) -> Vec<i64> {
+    let list = client.list_tickets(&Default::default()).await.unwrap();
+    assert!(list.windows(2).all(|w| w[0].rank < w[1].rank), "ranks must be strictly increasing");
+    list.into_iter().map(|t| t.id).collect()
+}
+
+#[tokio::test]
+async fn move_before_after_front_back() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    let mut ids = vec![];
+    for name in ["a", "b", "c", "d"] {
+        ids.push(client.create_ticket(&new(name)).await.unwrap().id);
+    }
+    let [a, b, c, d] = ids[..] else { unreachable!() };
+
+    let moved = client.move_ticket(d, &before(b)).await.unwrap();
+    assert_eq!(moved.id, d);
+    assert_eq!(moved.rank, 1.5);
+    assert_eq!(order(&client).await, vec![a, d, b, c]);
+
+    assert_eq!(client.move_ticket(a, &after(b)).await.unwrap().rank, 2.5);
+    assert_eq!(order(&client).await, vec![d, b, a, c]);
+
+    // To the front and to the back extend past the boundary.
+    assert_eq!(client.move_ticket(c, &before(d)).await.unwrap().rank, 0.5);
+    assert_eq!(order(&client).await, vec![c, d, b, a]);
+    assert_eq!(client.move_ticket(c, &after(a)).await.unwrap().rank, 3.5);
+    assert_eq!(order(&client).await, vec![d, b, a, c]);
+
+    // Moving next to an immediate neighbour keeps the order.
+    client.move_ticket(b, &after(d)).await.unwrap();
+    assert_eq!(order(&client).await, vec![d, b, a, c]);
+
+    // Other fields survive; updated_at is bumped.
+    let t = client.get_ticket(c).await.unwrap();
+    assert_eq!((t.title.as_str(), t.state.as_str()), ("c", "todo"));
+    assert!(t.updated_at > t.created_at);
+}
+
+#[tokio::test]
+async fn repeated_moves_renormalize() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    let a = client.create_ticket(&new("a")).await.unwrap().id;
+    let b = client.create_ticket(&new("b")).await.unwrap().id;
+    let c = client.create_ticket(&new("c")).await.unwrap().id;
+    let d = client.create_ticket(&new("d")).await.unwrap().id;
+    client.move_ticket(b, &after(d)).await.unwrap();
+    // Alternately squeeze c and d into the gap right after a; each move halves it until renormalization resets it.
+    let mut min_rank_diff = f64::MAX;
+    for i in 0..60 {
+        let (mover, other) = if i % 2 == 0 { (c, d) } else { (d, c) };
+        client.move_ticket(mover, &after(a)).await.unwrap();
+        assert_eq!(order(&client).await, vec![a, mover, other, b], "iteration {i}");
+        let list = client.list_tickets(&Default::default()).await.unwrap();
+        min_rank_diff = min_rank_diff.min(list[1].rank - list[0].rank);
+    }
+    assert!(min_rank_diff >= 5e-7, "gap collapsed to {min_rank_diff}");
+    let list = client.list_tickets(&Default::default()).await.unwrap();
+    assert!(list.iter().all(|t| t.rank < 10.0), "renormalization keeps ranks small: {:?}", list.iter().map(|t| t.rank).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn move_errors() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    let a = client.create_ticket(&new("a")).await.unwrap().id;
+    let b = client.create_ticket(&new("b")).await.unwrap().id;
+    let bad = [
+        (a, MoveTicket::default(), 400),
+        (a, MoveTicket { before: Some(b), after: Some(b) }, 400),
+        (a, before(a), 400),
+        (a, after(a), 400),
+        (a, before(9999), 404),
+        (9999, after(a), 404),
+    ];
+    for (id, req, status) in bad {
+        match client.move_ticket(id, &req).await {
+            Err(Error::Api { status: s, .. }) if s == status => {}
+            other => panic!("expected {status} for {id} {req:?}, got {other:?}"),
+        }
+    }
+    assert_eq!(order(&client).await, vec![a, b]);
 }
