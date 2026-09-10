@@ -39,16 +39,23 @@ fn docker_ready() -> bool {
     true
 }
 
-async fn serve(image: &str, max_workers: u32) -> String {
-    let config = Config::parse(&format!(
+fn config(image: &str, max_workers: u32) -> Config {
+    Config::parse(&format!(
         "[provider]\nlisten = \"127.0.0.1:0\"\nmax_workers = {max_workers}\n\
          [docker]\nimage = \"{image}\"\n[worker_env]\nGIT_TOKEN = \"git-secret\"\n"
     ))
-    .unwrap();
+    .unwrap()
+}
+
+async fn serve_state(state: AppState) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, api::router(AppState::new(config))).await.unwrap() });
+    tokio::spawn(async move { axum::serve(listener, api::router(state)).await.unwrap() });
     url
+}
+
+async fn serve(image: &str, max_workers: u32) -> String {
+    serve_state(AppState::new(config(image, max_workers))).await
 }
 
 /// Removes every container labelled with one of its worker ids, even when a test panics.
@@ -191,4 +198,29 @@ async fn status_tracks_containers_that_exit_or_vanish() {
     assert_eq!(s["workers"][0]["worker_id"], *b);
     assert_eq!(stop(&url, a).await, StatusCode::NOT_FOUND);
     assert_eq!(stop(&url, b).await, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn recovers_workers_after_restart() {
+    if !docker_ready() {
+        return;
+    }
+    let url = serve(SLEEP_IMAGE, 4).await;
+    let w = Workers::new("recover", 1);
+    let id = &w.0[0];
+    let worker: Value = start(&url, id).await.json().await.unwrap();
+    let cid = worker["container_id"].as_str().unwrap();
+
+    // A fresh provider against the same daemon; other tests' containers may be listed too.
+    let url2 = serve_state(AppState::recover(config(SLEEP_IMAGE, 4)).await.unwrap()).await;
+    let s = status(&url2).await;
+    let listed = s["workers"].as_array().unwrap();
+    assert!(listed.contains(&json!({ "worker_id": id, "container_id": cid, "status": "running" })), "{listed:?}");
+    let running = listed.iter().filter(|w| w["status"] == "running").count();
+    assert!(running >= 1 && s["in_use"] == running, "{s}");
+
+    assert_eq!(stop(&url2, id).await, StatusCode::NO_CONTENT);
+    assert!(docker(&["inspect", cid]).is_none(), "container still exists");
+    assert_eq!(stop(&url2, id).await, StatusCode::NOT_FOUND);
+    assert_eq!(status(&url).await["workers"], json!([]), "old instance drops the removed container");
 }

@@ -72,3 +72,19 @@ pub async fn states(ids: impl Iterator<Item = &str>) -> anyhow::Result<HashMap<S
         .map(|(id, state)| (id.to_string(), state.to_string()))
         .collect())
 }
+
+/// Every container this provider ever started (by label), as worker id -> container id.
+pub async fn tracked() -> anyhow::Result<BTreeMap<String, String>> {
+    let mut cmd = Command::new("docker");
+    cmd.args(["ps", "-a", "--no-trunc", "--filter", &format!("label={LABEL}")]);
+    cmd.args(["--format", &format!("{{{{.ID}}}} {{{{.Label \"{LABEL}\"}}}}")]);
+    let out = output(cmd).await?;
+    if !out.status.success() {
+        bail!("docker ps: {}", stderr(&out));
+    }
+    Ok(stdout(&out)
+        .lines()
+        .filter_map(|l| l.split_once(' '))
+        .map(|(id, worker)| (worker.to_string(), id.to_string()))
+        .collect())
+}
