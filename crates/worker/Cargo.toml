@@ -1,0 +1,18 @@
+[package]
+name = "worker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+api-client = { path = "../api-client" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+humantime = "2"
+libc = "0.2"
+
+[dev-dependencies]
+orchestrator = { path = "../orchestrator" }
+axum = "0.8"
+tempfile = "3"

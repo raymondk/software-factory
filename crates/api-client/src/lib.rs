@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +105,9 @@ pub struct PollResponse {
     pub ticket: Ticket,
     pub prompt: String,
     pub repos: Vec<String>,
+    /// The worker type's `run_timeout`, e.g. "1h".
+    #[serde(with = "humantime_serde")]
+    pub run_timeout: Duration,
 }
 
 /// One usage report: tokens and cost (dollars) a worker spent on a ticket in one agent run.

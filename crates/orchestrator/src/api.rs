@@ -374,14 +374,17 @@ async fn list_workers(State(state): State<AppState>) -> Result<Json<Vec<Worker>>
     Ok(Json(rows.into_iter().map(Worker::from).collect()))
 }
 
+/// Only the authenticated worker itself gets here, so a missing row means the reaper marked it dead since: 401, and a
+/// dead worker is never resurrected.
 async fn set_status(db: impl SqliteExecutor<'_>, id: &str, status: &str) -> Result<Worker, ApiError> {
-    let row: Option<WorkerRow> =
-        sqlx::query_as(&format!("UPDATE workers SET status = ?2, last_heartbeat = {NOW} WHERE id = ?1 RETURNING {WORKER_COLUMNS}"))
-            .bind(id)
-            .bind(status)
-            .fetch_optional(db)
-            .await?;
-    row.map(Worker::from).ok_or(ApiError::NotFound)
+    let row: Option<WorkerRow> = sqlx::query_as(&format!(
+        "UPDATE workers SET status = ?2, last_heartbeat = {NOW} WHERE id = ?1 AND status != 'dead' RETURNING {WORKER_COLUMNS}"
+    ))
+    .bind(id)
+    .bind(status)
+    .fetch_optional(db)
+    .await?;
+    row.map(Worker::from).ok_or(ApiError::Unauthorized)
 }
 
 async fn register(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
@@ -406,7 +409,8 @@ async fn poll(State(state): State<AppState>, Extension(caller): Extension<Caller
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
     let (worker_type,): (String,) =
         sqlx::query_as("SELECT worker_type FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
-    let prompts = state.config.worker_types.get(&worker_type).map(|w| &w.prompts).ok_or(ApiError::BadRequest("unknown worker type"))?;
+    let wt = state.config.worker_types.get(&worker_type).ok_or(ApiError::BadRequest("unknown worker type"))?;
+    let prompts = &wt.prompts;
     let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET assignee = ?1, updated_at = {NOW} WHERE id = \
@@ -426,7 +430,7 @@ async fn poll(State(state): State<AppState>, Extension(caller): Extension<Caller
     tx.commit().await?;
     let ticket: Ticket = row.into();
     let prompt = render(&prompts[&ticket.state], &ticket);
-    Ok(Json(PollResponse { ticket, prompt, repos: state.config.project.repos.clone() }).into_response())
+    Ok(Json(PollResponse { ticket, prompt, repos: state.config.project.repos.clone(), run_timeout: wt.run_timeout }).into_response())
 }
 
 fn render(template: &str, t: &Ticket) -> String {

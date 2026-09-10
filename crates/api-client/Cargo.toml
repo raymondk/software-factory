@@ -8,3 +8,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 thiserror = "2"
+humantime-serde = "1"

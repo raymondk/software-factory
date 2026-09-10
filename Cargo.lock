@@ -68,6 +68,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "api-client"
 version = "0.1.0"
 dependencies = [
+ "humantime-serde",
  "reqwest",
  "serde",
  "serde_json",
@@ -2521,6 +2522,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "api-client",
+ "axum",
+ "humantime",
+ "libc",
+ "orchestrator",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

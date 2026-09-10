@@ -132,6 +132,7 @@ async fn poll_takes_lowest_ranked_available_for_type() {
     assert_eq!(p.ticket.assignee.as_deref(), Some(w.id.as_str()));
     assert_eq!(p.prompt, format!("Resume #{resumable}"));
     assert_eq!(p.repos, ["https://github.com/org/a.git", "https://github.com/org/b.git"]);
+    assert_eq!(p.run_timeout, std::time::Duration::from_secs(3600));
     assert_eq!(human.get_ticket(resumable).await.unwrap().assignee.as_deref(), Some(w.id.as_str()));
     let listed = human.list_workers().await.unwrap();
     assert_eq!((listed[0].status.as_str(), listed[0].ticket), ("busy", Some(resumable)));
