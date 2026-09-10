@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use api_client::{Client, CreateComment, CreateTicket, CreateWorker, Error, MoveTicket, NewWorker, UpdateTicket};
+use api_client::{Client, CreateComment, CreateTicket, CreateWorker, Error, MoveTicket, NewWorker, ReportUsage, Totals, UpdateTicket};
 use tokio::sync::Barrier;
 
 mod common;
@@ -303,4 +303,85 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     fc.register(&f.id).await.unwrap();
     let p = fc.poll(&f.id).await.unwrap().expect("the freed ticket");
     assert_eq!((p.ticket.id, p.ticket.assignee.as_deref(), p.prompt.as_str()), (id, Some(f.id.as_str()), format!("Resume #{id}").as_str()));
+}
+
+fn usage(ticket_id: i64, tokens_in: i64, tokens_out: i64, cost: f64) -> ReportUsage {
+    ReportUsage { ticket_id, tokens_in, tokens_out, cost }
+}
+
+fn totals(t: &Totals) -> (i64, i64, f64, i64, i64) {
+    (t.tokens_in, t.tokens_out, t.cost, t.tickets_completed, t.tickets_failed)
+}
+
+#[tokio::test]
+async fn usage_is_attributed_and_scoped_to_the_reporting_worker() {
+    let (url, _dir) = serve().await;
+    let human = Client::new(&url, TOKEN);
+    let (w, wc) = worker(&url, &human, "reviewer").await;
+    let (other, oc) = worker(&url, &human, "default").await;
+    let id = ticket(&human, "a", "ready").await;
+
+    // No need to hold the ticket: usage is reported after the run, which may have released it.
+    let u = wc.report_usage(&w.id, &usage(id, 100, 20, 0.25)).await.unwrap();
+    assert_eq!((u.ticket_id, u.worker_id.as_str(), u.worker_type.as_str()), (id, w.id.as_str(), "reviewer"));
+    assert_eq!((u.tokens_in, u.tokens_out, u.cost), (100, 20, 0.25));
+    assert!(u.id > 0 && !u.created_at.is_empty());
+
+    assert_eq!(status(oc.report_usage(&w.id, &usage(id, 1, 1, 0.0)).await), 403);
+    assert_eq!(status(wc.report_usage(&other.id, &usage(id, 1, 1, 0.0)).await), 403);
+    assert_eq!(status(human.report_usage(&w.id, &usage(id, 1, 1, 0.0)).await), 403);
+    assert_eq!(status(wc.report_usage(&w.id, &usage(9999, 1, 1, 0.0)).await), 404);
+
+    let m = human.metrics().await.unwrap();
+    assert_eq!(totals(&m.totals), (100, 20, 0.25, 0, 0));
+    assert_eq!(m.per_ticket.len(), 1);
+    assert_eq!((m.per_ticket[0].key.ticket_id, m.per_ticket[0].totals.tokens_in), (id, 100));
+    assert_eq!(m.per_worker[0].key.worker_id, w.id);
+    assert_eq!(m.per_worker_type[0].key.worker_type, "reviewer");
+    // Workers may read metrics too.
+    assert_eq!(oc.metrics().await.unwrap().totals.tokens_in, 100);
+}
+
+#[tokio::test]
+async fn metrics_aggregate_and_count_ticket_states() {
+    let (url, _dir) = serve().await;
+    let human = Client::new(&url, TOKEN);
+    assert_eq!(totals(&human.metrics().await.unwrap().totals), (0, 0, 0.0, 0, 0));
+    let (a, ac) = worker(&url, &human, "default").await;
+    let (b, bc) = worker(&url, &human, "default").await;
+    let t1 = ticket(&human, "t1", "ready").await;
+    let t2 = ticket(&human, "t2", "ready").await;
+    // Done without any usage: counted in totals only.
+    ticket(&human, "t3", "done").await;
+
+    ac.report_usage(&a.id, &usage(t1, 100, 10, 1.0)).await.unwrap();
+    ac.report_usage(&a.id, &usage(t1, 200, 20, 2.0)).await.unwrap();
+    bc.report_usage(&b.id, &usage(t1, 50, 5, 0.5)).await.unwrap();
+    bc.report_usage(&b.id, &usage(t2, 1000, 100, 4.0)).await.unwrap();
+
+    let m = human.metrics().await.unwrap();
+    assert_eq!(totals(&m.totals), (1350, 135, 7.5, 1, 0));
+    let per_ticket: Vec<_> = m.per_ticket.iter().map(|x| (x.key.ticket_id, totals(&x.totals))).collect();
+    assert_eq!(per_ticket, [(t1, (350, 35, 3.5, 0, 0)), (t2, (1000, 100, 4.0, 0, 0))]);
+    let per_worker: Vec<_> = m.per_worker.iter().map(|x| (x.key.worker_id.as_str(), totals(&x.totals))).collect();
+    let mut expected = vec![(a.id.as_str(), (300, 30, 3.0, 0, 0)), (b.id.as_str(), (1050, 105, 4.5, 0, 0))];
+    expected.sort_by(|x, y| x.0.cmp(y.0));
+    assert_eq!(per_worker, expected, "ordered by worker id");
+    assert_eq!(m.per_worker_type.len(), 1);
+    assert_eq!((m.per_worker_type[0].key.worker_type.as_str(), totals(&m.per_worker_type[0].totals)), ("default", (1350, 135, 7.5, 0, 0)));
+
+    // States decide completed/failed: t1 done, t2 failed. A and B both touched t1; only B touched t2.
+    human.update_ticket(t1, &set_state("done")).await.unwrap();
+    human.update_ticket(t2, &set_state("failed")).await.unwrap();
+    let m = human.metrics().await.unwrap();
+    assert_eq!((m.totals.tickets_completed, m.totals.tickets_failed), (2, 1));
+    let per_ticket: Vec<_> = m.per_ticket.iter().map(|x| (x.key.ticket_id, x.totals.tickets_completed, x.totals.tickets_failed)).collect();
+    assert_eq!(per_ticket, [(t1, 1, 0), (t2, 0, 1)]);
+    let by_worker: std::collections::HashMap<_, _> =
+        m.per_worker.iter().map(|x| (x.key.worker_id.as_str(), (x.totals.tickets_completed, x.totals.tickets_failed))).collect();
+    assert_eq!((by_worker[a.id.as_str()], by_worker[b.id.as_str()]), ((1, 0), (1, 1)));
+    assert_eq!((m.per_worker_type[0].totals.tickets_completed, m.per_worker_type[0].totals.tickets_failed), (1, 1));
+    // Reverting a state reverts the count.
+    human.update_ticket(t2, &set_state("in_review")).await.unwrap();
+    assert_eq!(human.metrics().await.unwrap().totals.tickets_failed, 0);
 }

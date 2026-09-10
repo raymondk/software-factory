@@ -105,6 +105,71 @@ pub struct PollResponse {
     pub repos: Vec<String>,
 }
 
+/// One usage report: tokens and cost (dollars) a worker spent on a ticket in one agent run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Usage {
+    pub id: i64,
+    pub ticket_id: i64,
+    pub worker_id: String,
+    pub worker_type: String,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub cost: f64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportUsage {
+    pub ticket_id: i64,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub cost: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Totals {
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    pub cost: f64,
+    pub tickets_completed: i64,
+    pub tickets_failed: i64,
+}
+
+/// Totals under one key: a ticket id, worker id, or worker type. Serializes flat, with the key as `ticket_id`,
+/// `worker_id`, or `worker_type`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Breakdown<K> {
+    #[serde(flatten)]
+    pub key: K,
+    #[serde(flatten)]
+    pub totals: Totals,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketKey {
+    pub ticket_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerKey {
+    pub worker_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerTypeKey {
+    pub worker_type: String,
+}
+
+/// Completed and failed counts derive from ticket states `done` and `failed`. Totals count all such tickets; a
+/// breakdown counts the distinct ones with a usage record under its key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Metrics {
+    pub totals: Totals,
+    pub per_ticket: Vec<Breakdown<TicketKey>>,
+    pub per_worker: Vec<Breakdown<WorkerKey>>,
+    pub per_worker_type: Vec<Breakdown<WorkerTypeKey>>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("http error: {0}")]
@@ -196,6 +261,16 @@ impl Client {
             return Ok(None);
         }
         Ok(Some(resp.json().await?))
+    }
+
+    pub async fn report_usage(&self, id: &str, req: &ReportUsage) -> Result<Usage, Error> {
+        let r = self.http.post(format!("{}/workers/{id}/usage", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn metrics(&self) -> Result<Metrics, Error> {
+        let r = self.http.get(format!("{}/metrics", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
     }
 
     async fn send<T: for<'de> Deserialize<'de>>(r: reqwest::RequestBuilder) -> Result<T, Error> {

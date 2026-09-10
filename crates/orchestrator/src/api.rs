@@ -1,4 +1,7 @@
-use api_client::{Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, MoveTicket, NewWorker, PollResponse, Ticket, UpdateTicket, Worker};
+use api_client::{
+    Breakdown, Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, Metrics, MoveTicket, NewWorker, PollResponse, ReportUsage, Ticket, TicketKey, Totals,
+    UpdateTicket, Usage, Worker, WorkerKey, WorkerTypeKey,
+};
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
@@ -25,6 +28,8 @@ pub fn router(state: AppState) -> Router {
         .route("/workers/{id}/register", post(register))
         .route("/workers/{id}/heartbeat", post(heartbeat))
         .route("/workers/{id}/poll", post(poll))
+        .route("/workers/{id}/usage", post(report_usage))
+        .route("/metrics", get(metrics))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().route("/", get(ui)).merge(api).with_state(state)
 }
@@ -430,6 +435,112 @@ fn render(template: &str, t: &Ticket) -> String {
         .replace("{{ticket.title}}", &t.title)
         .replace("{{ticket.description}}", &t.description)
         .replace("{{ticket.state}}", &t.state)
+}
+
+#[derive(sqlx::FromRow)]
+struct UsageRow {
+    id: i64,
+    ticket_id: i64,
+    worker_id: String,
+    worker_type: String,
+    tokens_in: i64,
+    tokens_out: i64,
+    cost: f64,
+    created_at: String,
+}
+
+impl From<UsageRow> for Usage {
+    fn from(r: UsageRow) -> Usage {
+        Usage {
+            id: r.id,
+            ticket_id: r.ticket_id,
+            worker_id: r.worker_id,
+            worker_type: r.worker_type,
+            tokens_in: r.tokens_in,
+            tokens_out: r.tokens_out,
+            cost: r.cost,
+            created_at: r.created_at,
+        }
+    }
+}
+
+const USAGE_COLUMNS: &str = "id, ticket_id, worker_id, worker_type, tokens_in, tokens_out, cost, created_at";
+
+/// Spec 8: a worker reports what an agent run on a ticket cost. Attributed to the worker and its type at report time.
+async fn report_usage(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(req): Json<ReportUsage>,
+) -> Result<(StatusCode, Json<Usage>), ApiError> {
+    caller.require_worker(&id)?;
+    ticket_exists(&state, req.ticket_id).await?;
+    let row: Option<UsageRow> = sqlx::query_as(&format!(
+        "INSERT INTO usage (ticket_id, worker_id, worker_type, tokens_in, tokens_out, cost, created_at) \
+         SELECT ?1, id, worker_type, ?2, ?3, ?4, {NOW} FROM workers WHERE id = ?5 RETURNING {USAGE_COLUMNS}"
+    ))
+    .bind(req.ticket_id)
+    .bind(req.tokens_in)
+    .bind(req.tokens_out)
+    .bind(req.cost)
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await?;
+    row.map(|r| (StatusCode::CREATED, Json(r.into()))).ok_or(ApiError::NotFound)
+}
+
+#[derive(sqlx::FromRow)]
+struct TotalsRow {
+    tokens_in: i64,
+    tokens_out: i64,
+    cost: f64,
+    tickets_completed: i64,
+    tickets_failed: i64,
+}
+
+impl From<TotalsRow> for Totals {
+    fn from(r: TotalsRow) -> Totals {
+        Totals { tokens_in: r.tokens_in, tokens_out: r.tokens_out, cost: r.cost, tickets_completed: r.tickets_completed, tickets_failed: r.tickets_failed }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct KeyedRow<K> {
+    key: K,
+    #[sqlx(flatten)]
+    totals: TotalsRow,
+}
+
+/// Sums usage grouped by `key`, counting the distinct done/failed tickets that have usage under that key.
+async fn breakdown<K, T>(db: impl SqliteExecutor<'_>, key: &str, into: fn(K) -> T) -> Result<Vec<Breakdown<T>>, ApiError>
+where
+    K: Send + Unpin + for<'r> sqlx::Decode<'r, sqlx::Sqlite> + sqlx::Type<sqlx::Sqlite>,
+{
+    let rows: Vec<KeyedRow<K>> = sqlx::query_as(&format!(
+        "SELECT u.{key} AS key, SUM(u.tokens_in) AS tokens_in, SUM(u.tokens_out) AS tokens_out, SUM(u.cost) AS cost, \
+         COUNT(DISTINCT CASE WHEN t.state = 'done' THEN t.id END) AS tickets_completed, \
+         COUNT(DISTINCT CASE WHEN t.state = 'failed' THEN t.id END) AS tickets_failed \
+         FROM usage u JOIN tickets t ON t.id = u.ticket_id GROUP BY u.{key} ORDER BY u.{key}"
+    ))
+    .fetch_all(db)
+    .await?;
+    Ok(rows.into_iter().map(|r| Breakdown { key: into(r.key), totals: r.totals.into() }).collect())
+}
+
+async fn metrics(State(state): State<AppState>) -> Result<Json<Metrics>, ApiError> {
+    let totals: TotalsRow = sqlx::query_as(
+        "SELECT COALESCE(SUM(tokens_in), 0) AS tokens_in, COALESCE(SUM(tokens_out), 0) AS tokens_out, COALESCE(SUM(cost), 0.0) AS cost, \
+         (SELECT COUNT(*) FROM tickets WHERE state = 'done') AS tickets_completed, \
+         (SELECT COUNT(*) FROM tickets WHERE state = 'failed') AS tickets_failed FROM usage",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(Metrics {
+        totals: totals.into(),
+        per_ticket: breakdown(&state.pool, "ticket_id", |ticket_id| TicketKey { ticket_id }).await?,
+        per_worker: breakdown(&state.pool, "worker_id", |worker_id| WorkerKey { worker_id }).await?,
+        per_worker_type: breakdown(&state.pool, "worker_type", |worker_type| WorkerTypeKey { worker_type }).await?,
+    }))
 }
 
 pub enum ApiError {

@@ -95,7 +95,8 @@
   }
 
   async function show(id) {
-    const t = await api("/tickets/" + id);
+    const [t, m] = await Promise.all([api("/tickets/" + id), api("/metrics")]);
+    const u = m.per_ticket.find(x => x.ticket_id === id) ?? { tokens_in: 0, tokens_out: 0, cost: 0 };
     const d = document.getElementById("detail");
     const form = el("form");
     const title = Object.assign(el("input"), { name: "title", value: t.title, required: true });
@@ -139,6 +140,7 @@
       el("h2", "#" + t.id + " " + t.title),
       el("p", `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`),
       el("p", `created: ${t.created_at} · updated: ${t.updated_at}`),
+      el("p", `tokens in: ${u.tokens_in} · tokens out: ${u.tokens_out} · cost: $${u.cost.toFixed(2)}`),
       form,
       el("h3", "Comments"),
       thread,

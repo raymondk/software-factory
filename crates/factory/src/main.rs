@@ -1,4 +1,4 @@
-use api_client::{Client, Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, MoveTicket, UpdateTicket};
+use api_client::{Breakdown, Client, Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, MoveTicket, ReportUsage, Totals, UpdateTicket};
 use serde::Serialize;
 use clap::{Parser, Subcommand};
 
@@ -27,6 +27,8 @@ enum Command {
         #[command(subcommand)]
         command: WorkerCommand,
     },
+    /// Print usage totals and breakdowns per ticket, worker, and worker type
+    Metrics,
 }
 
 #[derive(Subcommand)]
@@ -44,6 +46,19 @@ enum WorkerCommand {
     Heartbeat { id: String },
     /// Pick up the next available ticket for the worker's type (worker token)
     Poll { id: String },
+    /// Report tokens and cost spent on a ticket (worker token)
+    Usage {
+        id: String,
+        #[arg(long)]
+        ticket: i64,
+        #[arg(long)]
+        tokens_in: i64,
+        #[arg(long)]
+        tokens_out: i64,
+        /// Dollars
+        #[arg(long)]
+        cost: f64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -151,13 +166,28 @@ async fn main() -> anyhow::Result<()> {
             WorkerCommand::Register { id } => print(&client.register(&id).await?),
             WorkerCommand::Heartbeat { id } => print(&client.heartbeat(&id).await?),
             WorkerCommand::Poll { id } => print(&client.poll(&id).await?),
+            WorkerCommand::Usage { id, ticket, tokens_in, tokens_out, cost } => {
+                print(&client.report_usage(&id, &ReportUsage { ticket_id: ticket, tokens_in, tokens_out, cost }).await?)
+            }
         },
+        Command::Metrics => {
+            let m = client.metrics().await?;
+            println!("kind\tkey\ttokens_in\ttokens_out\tcost\tcompleted\tfailed");
+            print_totals("totals", "-", &m.totals);
+            m.per_ticket.iter().for_each(|b: &Breakdown<_>| print_totals("ticket", &format!("#{}", b.key.ticket_id), &b.totals));
+            m.per_worker.iter().for_each(|b| print_totals("worker", &b.key.worker_id, &b.totals));
+            m.per_worker_type.iter().for_each(|b| print_totals("type", &b.key.worker_type, &b.totals));
+        }
     }
     Ok(())
 }
 
 fn print<T: Serialize>(t: &T) {
     println!("{}", serde_json::to_string_pretty(t).unwrap());
+}
+
+fn print_totals(kind: &str, key: &str, t: &Totals) {
+    println!("{kind}\t{key}\t{}\t{}\t{:.4}\t{}\t{}", t.tokens_in, t.tokens_out, t.cost, t.tickets_completed, t.tickets_failed);
 }
 
 fn print_comment(c: &Comment) {
