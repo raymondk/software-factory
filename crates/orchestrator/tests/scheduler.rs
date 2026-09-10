@@ -198,6 +198,23 @@ async fn dead_workers_still_listed_by_provider_are_stopped() {
 }
 
 #[tokio::test]
+async fn unknown_provider_workers_are_stopped() {
+    let (pool, config, provider, fake, _dir) = setup(10).await;
+    let starting = worker(&pool, &config, &fake, "default", "starting", true).await;
+    let idle = worker(&pool, &config, &fake, "default", "idle", true).await;
+    let busy = worker(&pool, &config, &fake, "default", "busy", true).await;
+    ticket(&pool, "ready", None).await; // idle still has work
+    fake.lock().unwrap().running.push("w-unknown".into());
+    scheduler::tick(&pool, &config, &provider).await.unwrap();
+    assert_eq!(fake.lock().unwrap().stops, vec!["w-unknown".to_string()]);
+    assert_eq!(fake.lock().unwrap().running, vec![starting.clone(), idle.clone(), busy.clone()]);
+    assert_eq!(status_of(&pool, &starting).await, "starting");
+    assert_eq!(status_of(&pool, &idle).await, "idle");
+    assert_eq!(status_of(&pool, &busy).await, "busy");
+    assert!(fake.lock().unwrap().starts.is_empty());
+}
+
+#[tokio::test]
 async fn failed_start_marks_worker_dead() {
     let dir = tempfile::tempdir().unwrap();
     let pool = db::open(&dir.path().join("test.db")).await.unwrap();

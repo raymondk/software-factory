@@ -49,6 +49,14 @@ pub async fn tick(pool: &SqlitePool, config: &Config, provider: &Provider) -> an
         }
     }
 
+    // Provider workers the orchestrator has no record of (restart with a fresh database): they can never register.
+    for w in status.workers.iter().filter(|w| !workers.iter().any(|(id, _, _)| id == &w.worker_id)) {
+        eprintln!("scheduler: stopping unknown worker {}", w.worker_id);
+        if let Err(e) = provider.stop(&w.worker_id).await {
+            eprintln!("scheduler: stop {}: {e:#}", w.worker_id);
+        }
+    }
+
     for (name, n) in available {
         let pending = workers.iter().filter(|(_, wt, s)| wt == name && (s == "starting" || s == "idle")).count() as u32;
         for _ in 0..n.saturating_sub(pending).min(slots) {
