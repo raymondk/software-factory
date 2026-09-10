@@ -92,6 +92,8 @@ impl Worker {
             let _ = dead_tx.send(());
         });
         let mut stop = Box::pin(shutdown());
+        // The ticket just timed out on: skipped on the very next poll while other work exists.
+        let mut exclude = None;
         loop {
             tokio::select! {
                 _ = &mut stop => {
@@ -99,8 +101,8 @@ impl Worker {
                     return Ok(());
                 }
                 _ = &mut dead_rx => return Err(reaped()),
-                r = self.step(adapter) => match r {
-                    Ok(()) => {}
+                r = self.step(adapter, exclude.take()) => match r {
+                    Ok(next) => exclude = next,
                     Err(Failure::Unauthorized) => return Err(reaped()),
                     Err(Failure::Api(e)) => {
                         eprintln!("worker {}: {e}", self.id);
@@ -143,10 +145,11 @@ impl Worker {
     }
 
     /// One poll: idles when nothing is available, otherwise runs the agent on the ticket and settles it afterwards.
-    async fn step<A: Adapter>(&self, adapter: &A) -> Result<(), Failure> {
-        let Some(job) = self.call("poll", || self.client.poll(&self.id)).await? else {
+    /// Returns the ticket to exclude from the next poll, if the run timed out.
+    async fn step<A: Adapter>(&self, adapter: &A, exclude: Option<i64>) -> Result<Option<i64>, Failure> {
+        let Some(job) = self.call("poll", || self.client.poll(&self.id, exclude)).await? else {
             tokio::time::sleep(self.poll_interval).await;
-            return Ok(());
+            return Ok(None);
         };
         let ticket = job.ticket.id;
         eprintln!("worker {}: ticket #{ticket} ({}): {}", self.id, job.ticket.state, job.ticket.title);
@@ -182,7 +185,7 @@ impl Worker {
         if let Some(patch) = patch {
             self.call("update ticket", || self.client.update_ticket(ticket, &patch)).await?;
         }
-        Ok(())
+        Ok(outcome.timed_out.then_some(ticket))
     }
 
     /// Creates the workspace and returns the agent's extra environment: orchestrator access and, when `GIT_TOKEN` is

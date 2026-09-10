@@ -98,11 +98,11 @@ async fn worker_token_authenticates_only_itself() {
     for other in [b.id.as_str(), "w-missing"] {
         assert_eq!(status(ac.register(other).await), 403);
         assert_eq!(status(ac.heartbeat(other).await), 403);
-        assert_eq!(status(ac.poll(other).await), 403);
+        assert_eq!(status(ac.poll(other, None).await), 403);
     }
     // Humans are not workers.
     assert_eq!(status(human.register(&a.id).await), 403);
-    assert_eq!(status(human.poll(&a.id).await), 403);
+    assert_eq!(status(human.poll(&a.id, None).await), 403);
     // Garbage tokens are rejected outright.
     let garbage = Client::new(&url, "not-a-token");
     assert_eq!(status(garbage.register(&a.id).await), 401);
@@ -127,7 +127,7 @@ async fn poll_takes_lowest_ranked_available_for_type() {
     // Move the in_progress one to the front: rank decides, not id.
     human.move_ticket(resumable, &MoveTicket { before: Some(todo), after: None }).await.unwrap();
 
-    let p = wc.poll(&w.id).await.unwrap().expect("a ticket");
+    let p = wc.poll(&w.id, None).await.unwrap().expect("a ticket");
     assert_eq!(p.ticket.id, resumable);
     assert_eq!(p.ticket.assignee.as_deref(), Some(w.id.as_str()));
     assert_eq!(p.prompt, format!("Resume #{resumable}"));
@@ -138,21 +138,35 @@ async fn poll_takes_lowest_ranked_available_for_type() {
     assert_eq!((listed[0].status.as_str(), listed[0].ticket), ("busy", Some(resumable)));
 
     // Next: ready1. Held and todo/in_review are skipped. Prompt renders every field.
-    let p = wc.poll(&w.id).await.unwrap().expect("a ticket");
+    let p = wc.poll(&w.id, None).await.unwrap().expect("a ticket");
     assert_eq!(p.ticket.id, ready1);
     assert_eq!(p.prompt, format!("Work on #{ready1} (ready): ready1\nabout ready1"));
 
     // Nothing left for this type: idle, 204.
-    assert!(wc.poll(&w.id).await.unwrap().is_none());
+    assert!(wc.poll(&w.id, None).await.unwrap().is_none());
     assert_eq!(human.list_workers().await.unwrap()[0].status, "idle");
     assert_eq!(human.get_ticket(review).await.unwrap().assignee, None);
     assert_eq!(human.get_ticket(todo).await.unwrap().assignee, None);
 
     // The reviewer type only sees in_review.
     let (r, rc) = worker(&url, &human, "reviewer").await;
-    let p = rc.poll(&r.id).await.unwrap().expect("a ticket");
+    let p = rc.poll(&r.id, None).await.unwrap().expect("a ticket");
     assert_eq!((p.ticket.id, p.prompt.as_str()), (review, format!("Review #{review}").as_str()));
-    assert!(rc.poll(&r.id).await.unwrap().is_none());
+    assert!(rc.poll(&r.id, None).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn poll_exclude_is_last_in_line() {
+    let (url, _dir) = serve().await;
+    let human = Client::new(&url, TOKEN);
+    let (w, wc) = worker(&url, &human, "default").await;
+    let first = ticket(&human, "first", "ready").await;
+    let second = ticket(&human, "second", "ready").await;
+    // Other work available: the excluded ticket is skipped.
+    assert_eq!(wc.poll(&w.id, Some(first)).await.unwrap().unwrap().ticket.id, second);
+    // Only the excluded ticket left: handed out anyway.
+    assert_eq!(wc.poll(&w.id, Some(first)).await.unwrap().unwrap().ticket.id, first);
+    assert!(wc.poll(&w.id, Some(first)).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -170,7 +184,7 @@ async fn concurrent_polls_never_share_a_ticket() {
         let barrier = barrier.clone();
         handles.push(tokio::spawn(async move {
             barrier.wait().await;
-            wc.poll(&w.id).await.unwrap().map(|p| (w.id, p.ticket.id))
+            wc.poll(&w.id, None).await.unwrap().map(|p| (w.id, p.ticket.id))
         }));
     }
     let mut got: Vec<(String, i64)> = vec![];
@@ -198,7 +212,7 @@ async fn acl_workers_modify_only_held_tickets() {
     let (other, oc) = worker(&url, &human, "default").await;
     let mine = ticket(&human, "mine", "ready").await;
     let theirs = ticket(&human, "theirs", "todo").await;
-    assert_eq!(wc.poll(&w.id).await.unwrap().unwrap().ticket.id, mine);
+    assert_eq!(wc.poll(&w.id, None).await.unwrap().unwrap().ticket.id, mine);
 
     // Not held: PATCH and move are forbidden, for the poller and a bystander alike.
     for c in [&wc, &oc] {
@@ -238,7 +252,7 @@ async fn state_change_clears_assignee() {
     let human = Client::new(&url, TOKEN);
     let (w, wc) = worker(&url, &human, "default").await;
     let id = ticket(&human, "a", "ready").await;
-    wc.poll(&w.id).await.unwrap().unwrap();
+    wc.poll(&w.id, None).await.unwrap().unwrap();
 
     // Same state: still held.
     let t = wc.update_ticket(id, &set_state("ready")).await.unwrap();
@@ -265,11 +279,11 @@ async fn worker_keeps_ticket_it_moves_to_in_progress() {
     let (w, wc) = worker(&url, &human, "default").await;
     let (other, oc) = worker(&url, &human, "default").await;
     let id = ticket(&human, "a", "ready").await;
-    assert_eq!(wc.poll(&w.id).await.unwrap().unwrap().ticket.id, id);
+    assert_eq!(wc.poll(&w.id, None).await.unwrap().unwrap().ticket.id, id);
 
     let t = wc.update_ticket(id, &set_state("in_progress")).await.unwrap();
     assert_eq!((t.state.as_str(), t.assignee.as_deref()), ("in_progress", Some(w.id.as_str())));
-    assert!(oc.poll(&other.id).await.unwrap().is_none(), "held in_progress ticket is not handed out");
+    assert!(oc.poll(&other.id, None).await.unwrap().is_none(), "held in_progress ticket is not handed out");
     assert_eq!(status(oc.update_ticket(id, &set_state("done")).await), 403);
     // A human moving it to in_progress still clears it.
     human.update_ticket(id, &set_state("ready")).await.unwrap();
@@ -291,7 +305,7 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     let (w, wc) = worker(&url, &human, "default").await;
     wc.register(&w.id).await.unwrap();
     let id = ticket(&human, "a", "in_progress").await;
-    assert_eq!(wc.poll(&w.id).await.unwrap().unwrap().ticket.id, id);
+    assert_eq!(wc.poll(&w.id, None).await.unwrap().unwrap().ticket.id, id);
     // Never registers: reaped from its creation time.
     let (silent, sc) = worker(&url, &human, "default").await;
     let (live, lc) = worker(&url, &human, "default").await;
@@ -318,7 +332,7 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     // Dead tokens no longer authenticate.
     assert_eq!(status(wc.heartbeat(&w.id).await), 401);
     assert_eq!(status(wc.register(&w.id).await), 401);
-    assert_eq!(status(wc.poll(&w.id).await), 401);
+    assert_eq!(status(wc.poll(&w.id, None).await), 401);
     assert_eq!(status(wc.update_ticket(id, &set_state("done")).await), 401);
     assert_eq!(status(sc.register(&silent.id).await), 401);
     lc.heartbeat(&live.id).await.unwrap();
@@ -326,7 +340,7 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     // The next poll resumes the ticket.
     let (f, fc) = worker(&url, &human, "default").await;
     fc.register(&f.id).await.unwrap();
-    let p = fc.poll(&f.id).await.unwrap().expect("the freed ticket");
+    let p = fc.poll(&f.id, None).await.unwrap().expect("the freed ticket");
     assert_eq!((p.ticket.id, p.ticket.assignee.as_deref(), p.prompt.as_str()), (id, Some(f.id.as_str()), format!("Resume #{id}").as_str()));
 }
 

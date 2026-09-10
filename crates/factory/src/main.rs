@@ -165,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
             }
             WorkerCommand::Register { id } => print(&client.register(&id).await?),
             WorkerCommand::Heartbeat { id } => print(&client.heartbeat(&id).await?),
-            WorkerCommand::Poll { id } => print(&client.poll(&id).await?),
+            WorkerCommand::Poll { id } => print(&client.poll(&id, None).await?),
             WorkerCommand::Usage { id, ticket, tokens_in, tokens_out, cost } => {
                 print(&client.report_usage(&id, &ReportUsage { ticket_id: ticket, tokens_in, tokens_out, cost }).await?)
             }

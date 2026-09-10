@@ -100,6 +100,12 @@ pub struct NewWorker {
     pub token: String,
 }
 
+/// Poll body. `exclude`: a ticket to hand out only if nothing else is available (the one just timed out on).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PollRequest {
+    pub exclude: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PollResponse {
     pub ticket: Ticket,
@@ -259,8 +265,8 @@ impl Client {
     }
 
     /// `None` when no ticket is available.
-    pub async fn poll(&self, id: &str) -> Result<Option<PollResponse>, Error> {
-        let r = self.http.post(format!("{}/workers/{id}/poll", self.base)).bearer_auth(&self.token);
+    pub async fn poll(&self, id: &str, exclude: Option<i64>) -> Result<Option<PollResponse>, Error> {
+        let r = self.http.post(format!("{}/workers/{id}/poll", self.base)).bearer_auth(&self.token).json(&PollRequest { exclude });
         let resp = Self::check(r).await?;
         if resp.status() == reqwest::StatusCode::NO_CONTENT {
             return Ok(None);

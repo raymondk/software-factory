@@ -210,6 +210,27 @@ wait
 }
 
 #[tokio::test]
+async fn timed_out_ticket_is_not_resumed_while_other_work_exists() {
+    let f = Fixture::new().await;
+    let slow = f.ticket("slow").await;
+    let quick = f.ticket("quick").await;
+    // Hangs on `slow`, finishes anything else; records the order tickets were run in.
+    let (child, _, ws) = f
+        .worker(&format!(
+            r#"echo $FACTORY_TICKET >> order.txt
+if [ "$FACTORY_TICKET" = {slow} ]; then sleep 60; fi
+patch '{{"state":"done"}}'
+"#
+        ))
+        .await;
+    f.wait_for(quick, |t| t.state == "done").await;
+    let order = std::fs::read_to_string(ws.join("order.txt")).unwrap();
+    let runs: Vec<&str> = order.lines().collect();
+    assert_eq!(&runs[..2], [slow.to_string().as_str(), quick.to_string().as_str()], "after timing out on slow the worker takes quick");
+    stop(child).await;
+}
+
+#[tokio::test]
 async fn left_in_progress_is_failed() {
     let f = Fixture::new().await;
     let id = f.ticket("lazy").await;

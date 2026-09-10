@@ -103,7 +103,7 @@ Tickets:
 Workers:
 - `POST /workers/{id}/register`: worker confirms it is alive. The id and token were assigned by the orchestrator before start.
 - `POST /workers/{id}/heartbeat`
-- `POST /workers/{id}/poll`: returns the lowest-ranked available ticket for this worker's type, with the prompt for its current state and the project's repos, or nothing. Sets assignee atomically.
+- `POST /workers/{id}/poll`: returns the lowest-ranked available ticket for this worker's type, with the prompt for its current state and the project's repos, or nothing. Sets assignee atomically. An optional body `{"exclude": <ticket id>}` (the ticket the worker just timed out on) makes that ticket last in line: it is returned only when nothing else is available.
 - `POST /workers/{id}/usage`: report token and cost usage for a ticket.
 - `GET /workers`: list workers and their status.
 

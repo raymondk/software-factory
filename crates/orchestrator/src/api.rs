@@ -1,5 +1,5 @@
 use api_client::{
-    Breakdown, Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, Metrics, MoveTicket, NewWorker, PollResponse, ReportUsage, Ticket, TicketKey, Totals,
+    Breakdown, Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, Metrics, MoveTicket, NewWorker, PollRequest, PollResponse, ReportUsage, Ticket, TicketKey, Totals,
     UpdateTicket, Usage, Worker, WorkerKey, WorkerTypeKey,
 };
 use axum::extract::{Path, Query, Request, State};
@@ -405,8 +405,14 @@ async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<C
 }
 
 /// Hands the worker the lowest-ranked unassigned ticket in a state its type has a prompt for. 204 when there is none.
-async fn poll(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Response, ApiError> {
+async fn poll(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Option<Json<PollRequest>>,
+) -> Result<Response, ApiError> {
     caller.require_worker(&id)?;
+    let exclude = body.and_then(|Json(b)| b.exclude);
     let mut conn = state.pool.acquire().await?;
     // IMMEDIATE serializes polls so two workers never pick the same ticket.
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
@@ -417,11 +423,12 @@ async fn poll(State(state): State<AppState>, Extension(caller): Extension<Caller
     let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET assignee = ?1, updated_at = {NOW} WHERE id = \
-         (SELECT id FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?2)) ORDER BY rank ASC, id ASC LIMIT 1) \
+         (SELECT id FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?2)) ORDER BY id IS ?3, rank ASC, id ASC LIMIT 1) \
          RETURNING {COLUMNS}"
     ))
     .bind(&id)
     .bind(format!("[{}]", states.join(",")))
+    .bind(exclude)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {
