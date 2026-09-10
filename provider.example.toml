@@ -1,0 +1,10 @@
+[provider]
+listen = "0.0.0.0:8081"
+max_workers = 4
+
+[docker]
+image = "software-factory/worker:latest"
+
+[worker_env]
+GIT_TOKEN = "change-me"
+CLAUDE_CODE_OAUTH_TOKEN = "change-me"
