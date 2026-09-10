@@ -153,7 +153,7 @@ impl Worker {
         };
         let ticket = job.ticket.id;
         eprintln!("worker {}: ticket #{ticket} ({}): {}", self.id, job.ticket.state, job.ticket.title);
-        let result = match self.prepare(ticket) {
+        let result = match self.prepare(ticket, &job.repos) {
             Ok(env) => adapter.run(&job.prompt, &self.workspace, job.run_timeout, &env).await,
             Err(e) => Err(e),
         };
@@ -188,15 +188,17 @@ impl Worker {
         Ok(outcome.timed_out.then_some(ticket))
     }
 
-    /// Creates the workspace and returns the agent's extra environment: orchestrator access and, when `GIT_TOKEN` is
-    /// set, git and gh credentials (a `.git-credentials` store in the workspace, wired in via `GIT_CONFIG_*`).
-    fn prepare(&self, ticket: i64) -> anyhow::Result<Vec<(String, String)>> {
+    /// Creates the workspace and returns the agent's extra environment: orchestrator access, the project's repos
+    /// (space-separated in `FACTORY_REPOS`) and, when `GIT_TOKEN` is set, git and gh credentials (a `.git-credentials`
+    /// store in the workspace, wired in via `GIT_CONFIG_*`).
+    fn prepare(&self, ticket: i64, repos: &[String]) -> anyhow::Result<Vec<(String, String)>> {
         std::fs::create_dir_all(&self.workspace).with_context(|| format!("creating {}", self.workspace.display()))?;
         let mut env = vec![
             ("FACTORY_URL".to_string(), self.url.clone()),
             ("FACTORY_TOKEN".to_string(), self.token.clone()),
             ("FACTORY_WORKER_ID".to_string(), self.id.clone()),
             ("FACTORY_TICKET".to_string(), ticket.to_string()),
+            ("FACTORY_REPOS".to_string(), repos.join(" ")),
         ];
         if let Ok(token) = std::env::var("GIT_TOKEN") {
             use std::os::unix::fs::PermissionsExt;

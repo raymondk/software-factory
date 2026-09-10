@@ -144,6 +144,7 @@ async fn success_moves_on_and_reports_usage() {
             r#"cat > stdin.txt
 printf '%s' "$PROMPT" > prompt.txt
 printf '%s' "$GIT_CONFIG_VALUE_0" > git.txt
+printf '%s' "$FACTORY_REPOS" > repos.txt
 patch '{"state":"in_review"}'
 echo working
 echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
@@ -158,6 +159,7 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
     assert_eq!(std::fs::read_to_string(ws.join("prompt.txt")).unwrap(), prompt);
     assert_eq!(std::fs::read_to_string(ws.join("git.txt")).unwrap(), format!("store --file={}", ws.join(".git-credentials").display()));
     assert_eq!(std::fs::read_to_string(ws.join(".git-credentials")).unwrap(), "https://x-access-token:t0k@github.com\n");
+    assert_eq!(std::fs::read_to_string(ws.join("repos.txt")).unwrap(), "https://github.com/org/a.git");
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let m = f.human.metrics().await.unwrap();

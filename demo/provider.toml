@@ -1,0 +1,11 @@
+[provider]
+listen = "0.0.0.0:8081"
+max_workers = 2
+
+[docker]
+image = "software-factory/worker:latest"
+
+# demo.sh fills these from the environment into a copy in a temp dir.
+[worker_env]
+GIT_TOKEN = "${GIT_TOKEN}"
+CLAUDE_CODE_OAUTH_TOKEN = "${CLAUDE_CODE_OAUTH_TOKEN}"
