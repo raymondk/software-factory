@@ -550,6 +550,7 @@ async fn metrics(State(state): State<AppState>) -> Result<Json<Metrics>, ApiErro
     }))
 }
 
+#[derive(Debug)]
 pub enum ApiError {
     Unauthorized,
     Forbidden,

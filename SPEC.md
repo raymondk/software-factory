@@ -201,6 +201,7 @@ repos = ["https://github.com/org/repo-a.git", "https://github.com/org/repo-b.git
 listen = "0.0.0.0:8080"
 token = "..."
 heartbeat_timeout = "60s"
+# public_url = "http://localhost:8080"   # how workers reach this orchestrator; defaults to the listen address
 
 [scheduler]
 max_workers = 4

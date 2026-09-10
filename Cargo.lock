@@ -1106,6 +1106,7 @@ dependencies = [
  "api-client",
  "axum",
  "humantime-serde",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",

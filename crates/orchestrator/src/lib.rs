@@ -3,7 +3,9 @@ use std::sync::Arc;
 pub mod api;
 pub mod config;
 pub mod db;
+pub mod provider;
 pub mod reaper;
+pub mod scheduler;
 
 pub const STATES: [&str; 6] = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
 
