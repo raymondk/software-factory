@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Software Factory</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 1.5rem; display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+  h1 { grid-column: 1 / -1; margin: 0; font-size: 1.2rem; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #ddd; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #f4f4f4; }
+  form { display: grid; gap: .5rem; margin-bottom: 1rem; }
+  input, textarea { font: inherit; padding: .3rem; }
+  pre { white-space: pre-wrap; }
+  #detail:empty::before { content: "Select a ticket."; color: #888; }
+</style>
+<h1>Software Factory</h1>
+<section>
+  <form id="create">
+    <input name="title" placeholder="Title" required>
+    <textarea name="description" placeholder="Description" rows="3"></textarea>
+    <button>Create ticket</button>
+  </form>
+  <table>
+    <thead><tr><th>#</th><th>Title</th><th>State</th><th>Rank</th><th>Assignee</th></tr></thead>
+    <tbody id="tickets"></tbody>
+  </table>
+</section>
+<section id="detail"></section>
+<script>
+  const TOKEN = __TOKEN__;
+  const headers = { Authorization: "Bearer " + TOKEN, "Content-Type": "application/json" };
+  const api = (path, opts) => fetch(path, { headers, ...opts }).then(async r => {
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    return r.json();
+  });
+  const el = (tag, text) => { const e = document.createElement(tag); if (text != null) e.textContent = text; return e; };
+
+  async function list() {
+    const tbody = document.getElementById("tickets");
+    tbody.replaceChildren();
+    for (const t of await api("/tickets")) {
+      const tr = el("tr");
+      for (const v of [t.id, t.title, t.state, t.rank, t.assignee ?? ""]) tr.append(el("td", v));
+      tr.onclick = () => show(t.id);
+      tbody.append(tr);
+    }
+  }
+
+  async function show(id) {
+    const t = await api("/tickets/" + id);
+    const d = document.getElementById("detail");
+    d.replaceChildren(
+      el("h2", "#" + t.id + " " + t.title),
+      el("p", `state: ${t.state} · rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`),
+      el("p", `created: ${t.created_at} · updated: ${t.updated_at}`),
+      el("pre", t.description),
+    );
+  }
+
+  document.getElementById("create").onsubmit = async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const t = await api("/tickets", { method: "POST", body: JSON.stringify({ title: f.get("title"), description: f.get("description") }) });
+    e.target.reset();
+    await list();
+    show(t.id);
+  };
+
+  list().catch(e => alert(e.message));
+</script>

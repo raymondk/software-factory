@@ -1,0 +1,32 @@
+[project]
+name = "my-project"
+repos = ["https://github.com/org/repo-a.git", "https://github.com/org/repo-b.git"]
+
+[orchestrator]
+listen = "0.0.0.0:8080"
+token = "change-me"
+heartbeat_timeout = "60s"
+# database = "factory.db"   # defaults to factory.db next to this file
+
+[scheduler]
+max_workers = 4
+
+[provider]
+url = "http://localhost:8081"
+
+[worker_types.default]
+agent = "claude-code"
+run_timeout = "1h"
+
+[worker_types.default.prompts]
+ready = """
+You are working on ticket {{ticket.id}}: {{ticket.title}}.
+Read the ticket and its comments with the factory CLI.
+Move the ticket to in_progress, implement the change, open a pull request,
+add its URL to the ticket, and move the ticket to in_review.
+"""
+in_progress = """
+You are resuming ticket {{ticket.id}}: {{ticket.title}}.
+A previous attempt was interrupted. Read the ticket and its comments,
+check for an existing branch or pull request, and continue from there.
+"""
