@@ -1,0 +1,1 @@
+ALTER TABLE tickets ADD COLUMN links TEXT NOT NULL DEFAULT '[]';

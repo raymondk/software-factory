@@ -1,4 +1,4 @@
-use api_client::{Client, CreateTicket, Ticket};
+use api_client::{Client, CreateTicket, ListTickets, Ticket, UpdateTicket};
 use clap::{Parser, Subcommand};
 
 /// CLI for the Software Factory orchestrator.
@@ -33,9 +33,32 @@ enum TicketCommand {
         description: String,
     },
     /// List tickets in rank order
-    List,
+    List {
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long)]
+        assignee: Option<String>,
+    },
     /// Show one ticket
     View { id: i64 },
+    /// Edit fields of a ticket; omitted fields are untouched
+    Edit {
+        id: i64,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        /// One of: todo, ready, in_progress, in_review, failed, done
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long, conflicts_with = "clear_assignee")]
+        assignee: Option<String>,
+        #[arg(long)]
+        clear_assignee: bool,
+        /// Append a link; repeatable
+        #[arg(long = "add-link", value_name = "URL")]
+        add_link: Vec<String>,
+    },
 }
 
 #[tokio::main]
@@ -48,12 +71,23 @@ async fn main() -> anyhow::Result<()> {
             TicketCommand::Create { title, description } => {
                 print(&client.create_ticket(&CreateTicket { title, description }).await?)
             }
-            TicketCommand::List => {
-                for t in client.list_tickets().await? {
+            TicketCommand::List { state, assignee } => {
+                for t in client.list_tickets(&ListTickets { state, assignee }).await? {
                     println!("#{}\t{}\t{}\t{}", t.id, t.state, t.rank, t.title);
                 }
             }
             TicketCommand::View { id } => print(&client.get_ticket(id).await?),
+            TicketCommand::Edit { id, title, description, state, assignee, clear_assignee, add_link } => {
+                let links = if add_link.is_empty() {
+                    None
+                } else {
+                    let mut links = client.get_ticket(id).await?.links;
+                    links.extend(add_link);
+                    Some(links)
+                };
+                let assignee = if clear_assignee { Some(None) } else { assignee.map(Some) };
+                print(&client.update_ticket(id, &UpdateTicket { title, description, state, assignee, links }).await?)
+            }
         },
     }
     Ok(())

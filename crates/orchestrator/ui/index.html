@@ -9,7 +9,8 @@
   tbody tr { cursor: pointer; }
   tbody tr:hover { background: #f4f4f4; }
   form { display: grid; gap: .5rem; margin-bottom: 1rem; }
-  input, textarea { font: inherit; padding: .3rem; }
+  input, textarea, select { font: inherit; padding: .3rem; }
+  #filter { margin-bottom: .5rem; }
   pre { white-space: pre-wrap; }
   #detail:empty::before { content: "Select a ticket."; color: #888; }
 </style>
@@ -20,6 +21,7 @@
     <textarea name="description" placeholder="Description" rows="3"></textarea>
     <button>Create ticket</button>
   </form>
+  <label id="filter">State <select id="state-filter"><option value="">all</option></select></label>
   <table>
     <thead><tr><th>#</th><th>Title</th><th>State</th><th>Rank</th><th>Assignee</th></tr></thead>
     <tbody id="tickets"></tbody>
@@ -34,11 +36,17 @@
     return r.json();
   });
   const el = (tag, text) => { const e = document.createElement(tag); if (text != null) e.textContent = text; return e; };
+  const STATES = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
+  const stateSelect = (select, value) => {
+    for (const s of STATES) { const o = el("option", s); o.value = s; o.selected = s === value; select.append(o); }
+    return select;
+  };
 
   async function list() {
     const tbody = document.getElementById("tickets");
     tbody.replaceChildren();
-    for (const t of await api("/tickets")) {
+    const state = document.getElementById("state-filter").value;
+    for (const t of await api("/tickets" + (state ? "?state=" + state : ""))) {
       const tr = el("tr");
       for (const v of [t.id, t.title, t.state, t.rank, t.assignee ?? ""]) tr.append(el("td", v));
       tr.onclick = () => show(t.id);
@@ -49,13 +57,29 @@
   async function show(id) {
     const t = await api("/tickets/" + id);
     const d = document.getElementById("detail");
+    const form = el("form");
+    const title = Object.assign(el("input"), { name: "title", value: t.title, required: true });
+    const state = stateSelect(el("select"), t.state);
+    const description = Object.assign(el("textarea"), { name: "description", value: t.description, rows: 6 });
+    const links = Object.assign(el("textarea"), { name: "links", value: t.links.join("\n"), rows: 3, placeholder: "Links, one per line" });
+    form.append(title, state, description, links, el("button", "Save"));
+    form.onsubmit = async e => {
+      e.preventDefault();
+      const body = { title: title.value, state: state.value, description: description.value,
+                     links: links.value.split("\n").map(l => l.trim()).filter(Boolean) };
+      await api("/tickets/" + t.id, { method: "PATCH", body: JSON.stringify(body) }).catch(e => alert(e.message));
+      await list();
+      show(t.id);
+    };
     d.replaceChildren(
       el("h2", "#" + t.id + " " + t.title),
-      el("p", `state: ${t.state} · rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`),
+      el("p", `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`),
       el("p", `created: ${t.created_at} · updated: ${t.updated_at}`),
-      el("pre", t.description),
+      form,
     );
   }
+
+  stateSelect(document.getElementById("state-filter")).onchange = () => list().catch(e => alert(e.message));
 
   document.getElementById("create").onsubmit = async e => {
     e.preventDefault();
