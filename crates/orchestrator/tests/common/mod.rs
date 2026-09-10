@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use orchestrator::{api, config::Config, db, AppState};
+use orchestrator::{api, config::Config, db, reaper, AppState};
 
 pub const TOKEN: &str = "secret";
 
@@ -10,6 +10,7 @@ pub async fn serve(config: &str) -> (String, tempfile::TempDir) {
     let pool = db::open(&dir.path().join("test.db")).await.unwrap();
     let mut config = Config::parse(config).unwrap();
     config.orchestrator.token = TOKEN.into();
+    tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));
     let router = api::router(AppState { pool, config: Arc::new(config) });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());

@@ -256,3 +256,51 @@ async fn state_change_clears_assignee() {
     let t = human.update_ticket(id, &set_state("done")).await.unwrap();
     assert_eq!(t.assignee, None);
 }
+
+#[tokio::test]
+async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
+    let timeout = std::time::Duration::from_millis(200);
+    let (url, dir) = common::serve(&CONFIG.replace("\"60s\"", "\"200ms\"")).await;
+    let pool = orchestrator::db::open(&dir.path().join("test.db")).await.unwrap();
+    let human = Client::new(&url, TOKEN);
+    let (w, wc) = worker(&url, &human, "default").await;
+    wc.register(&w.id).await.unwrap();
+    let id = ticket(&human, "a", "in_progress").await;
+    assert_eq!(wc.poll(&w.id).await.unwrap().unwrap().ticket.id, id);
+    // Never registers: reaped from its creation time.
+    let (silent, sc) = worker(&url, &human, "default").await;
+    let (live, lc) = worker(&url, &human, "default").await;
+    lc.register(&live.id).await.unwrap();
+
+    assert!(orchestrator::reaper::reap(&pool, timeout).await.unwrap().is_empty());
+    tokio::time::sleep(timeout + std::time::Duration::from_millis(100)).await;
+    lc.heartbeat(&live.id).await.unwrap();
+    let mut reaped = orchestrator::reaper::reap(&pool, timeout).await.unwrap();
+    reaped.sort();
+    let mut expected = vec![w.id.clone(), silent.id.clone()];
+    expected.sort();
+    assert_eq!(reaped, expected);
+    assert!(orchestrator::reaper::reap(&pool, timeout).await.unwrap().is_empty());
+
+    let by_id: std::collections::HashMap<_, _> = human.list_workers().await.unwrap().into_iter().map(|x| (x.id.clone(), x)).collect();
+    assert_eq!((by_id[&w.id].status.as_str(), by_id[&w.id].ticket), ("dead", None));
+    assert_eq!(by_id[&silent.id].status, "dead");
+    assert_eq!(by_id[&live.id].status, "idle");
+    // The ticket keeps its state with the assignee cleared.
+    let t = human.get_ticket(id).await.unwrap();
+    assert_eq!((t.state.as_str(), t.assignee), ("in_progress", None));
+
+    // Dead tokens no longer authenticate.
+    assert_eq!(status(wc.heartbeat(&w.id).await), 401);
+    assert_eq!(status(wc.register(&w.id).await), 401);
+    assert_eq!(status(wc.poll(&w.id).await), 401);
+    assert_eq!(status(wc.update_ticket(id, &set_state("done")).await), 401);
+    assert_eq!(status(sc.register(&silent.id).await), 401);
+    lc.heartbeat(&live.id).await.unwrap();
+
+    // The next poll resumes the ticket.
+    let (f, fc) = worker(&url, &human, "default").await;
+    fc.register(&f.id).await.unwrap();
+    let p = fc.poll(&f.id).await.unwrap().expect("the freed ticket");
+    assert_eq!((p.ticket.id, p.ticket.assignee.as_deref(), p.prompt.as_str()), (id, Some(f.id.as_str()), format!("Resume #{id}").as_str()));
+}

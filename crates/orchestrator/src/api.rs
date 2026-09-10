@@ -65,7 +65,7 @@ async fn auth(State(state): State<AppState>, mut req: Request, next: Next) -> Re
     let caller = if token == state.config.orchestrator.token {
         Caller::Human
     } else {
-        let worker: Result<Option<(String,)>, _> = sqlx::query_as("SELECT id FROM workers WHERE token = ?1").bind(&token).fetch_optional(&state.pool).await;
+        let worker: Result<Option<(String,)>, _> = sqlx::query_as("SELECT id FROM workers WHERE token = ?1 AND status != 'dead'").bind(&token).fetch_optional(&state.pool).await;
         match worker {
             Ok(Some((id,))) => Caller::Worker(id),
             Ok(None) => return ApiError::Unauthorized.into_response(),
