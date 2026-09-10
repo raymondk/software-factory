@@ -9,7 +9,7 @@ Software Factory takes tickets from a team of developers and has agents carry th
 It is made of three components:
 
 - **Orchestrator**: owns tickets, exposes a REST API, web UI, and CLI, and decides when workers are needed.
-- **Worker Provider**: an abstraction that starts and stops workers somewhere (Docker, Kubernetes, VMs).
+- **Worker Provider**: a separate process that starts and stops workers somewhere (Docker, Kubernetes, VMs) and holds the credentials they need.
 - **Worker**: a runtime around an agent. Pulls tickets from the orchestrator, does the work, reports back.
 
 One orchestrator serves one project. A project may span several repositories.
@@ -17,9 +17,9 @@ One orchestrator serves one project. A project may span several repositories.
 ```
 Web UI / CLI ──▶ Orchestrator REST API ◀── Worker (polls for tickets, reports back)
                        │
-                       │ start / stop
+                       │ start / stop / status (REST)
                        ▼
-                Worker Provider ──▶ Worker container (agent + git + factory CLI)
+        Worker Provider (separate process) ──▶ Worker container (agent + git + factory CLI)
 ```
 
 ## 2. Concepts
@@ -107,7 +107,7 @@ Metrics:
 Periodic loop:
 1. Count available tickets per worker type.
 2. Count idle and busy workers per type.
-3. Ask the provider to start workers until each type has one worker per available ticket, capped by `max_workers`.
+3. Ask the provider to start workers until each type has one worker per available ticket, capped by `max_workers` and by the provider's remaining capacity from `/status`.
 4. Ask the provider to stop idle workers beyond what is needed.
 
 Later: dependencies between tickets and worker affinity.
@@ -126,15 +126,19 @@ Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets, s
 
 ## 5. Worker Provider
 
-Interface the orchestrator uses:
+A separate process. The orchestrator connects to it at a configured URL. It holds the credentials workers need and runs where the workers run, so the orchestrator never sees credentials and can be hosted anywhere.
 
-- `start(worker_type) -> worker_id`
-- `stop(worker_id)`
-- `list() -> [(worker_id, status)]`
+REST API the orchestrator calls:
+
+- `POST /workers`: body `{ worker_type, orchestrator_url, worker_token }`. Starts a worker. Returns `worker_id`.
+- `DELETE /workers/{id}`: stops a worker.
+- `GET /status`: returns the list of workers the provider believes are running with their status, plus provider-level information: total capacity (maximum workers it can run), capacity in use, and anything provider-specific.
 
 The provider starts a worker with these environment variables: orchestrator URL, worker token, worker type, and the credentials it is configured with (git token, agent credentials). The provider knows nothing about tickets or repos.
 
-MVP implementation: Docker. Runs the worker image locally. Later: Kubernetes, cloud VMs.
+The scheduler uses capacity from `/status` as an upper bound alongside `max_workers`.
+
+MVP implementation: a Docker provider binary that runs the worker image on the local Docker daemon. Its own config holds the image name and credentials. Later: Kubernetes, cloud VMs.
 
 ## 6. Worker
 
@@ -180,9 +184,7 @@ heartbeat_timeout = "60s"
 max_workers = 4
 
 [provider]
-type = "docker"
-image = "software-factory/worker:latest"
-env = { GIT_TOKEN = "...", CLAUDE_CODE_OAUTH_TOKEN = "..." }
+url = "http://localhost:8081"
 
 [worker_types.default]
 agent = "claude-code"
@@ -198,6 +200,21 @@ add its URL to the ticket, and move the ticket to in_review.
 
 The `prompts` table maps states to prompt templates. A worker type only picks up tickets in states it has a prompt for.
 
+The Docker provider has its own config file:
+
+```toml
+[provider]
+listen = "0.0.0.0:8081"
+max_workers = 4
+
+[docker]
+image = "software-factory/worker:latest"
+
+[worker_env]
+GIT_TOKEN = "..."
+CLAUDE_CODE_OAUTH_TOKEN = "..."
+```
+
 ## 8. Metrics
 
 Workers report usage per ticket after each agent run. The orchestrator stores raw records and aggregates by ticket, worker, and worker type. Exposed via `GET /metrics` and the UI.
@@ -209,7 +226,7 @@ One ticket goes end to end through one worker.
 In:
 - Orchestrator with SQLite, REST API, minimal web UI, CLI.
 - Ticket states, assignee, ACL, comments.
-- Docker provider.
+- Docker provider as a separate process.
 - Worker with Claude Code adapter. One worker type. Picks up `ready`, opens a PR, moves to `in_review`. Exits after one ticket.
 - Scheduler: one worker per available ticket, capped.
 - Metrics: tokens and cost per ticket.
@@ -236,6 +253,7 @@ Out:
 ## 11. Tech stack
 
 - **Orchestrator**: Rust, Axum, SQLite via SQLx. Single binary serving API and UI.
+- **Docker provider**: Rust, Axum. Talks to the local Docker daemon.
 - **Worker**: Rust binary in a Docker image with the Claude Code CLI, git, and the `factory` CLI.
 - **CLI**: Rust. Shares an API client crate with the worker.
 - **Web UI**: plain HTML and JavaScript, embedded in the orchestrator.
