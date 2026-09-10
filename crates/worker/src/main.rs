@@ -7,7 +7,7 @@ use anyhow::{bail, Context};
 use api_client::{Client, CreateComment, Error, ReportUsage, UpdateTicket};
 
 mod adapter;
-use adapter::{Adapter, CommandAdapter, Outcome, Usage};
+use adapter::{Adapter, ClaudeCodeAdapter, CommandAdapter, Outcome, Usage};
 
 enum Failure {
     /// The orchestrator rejected the token: the worker was reaped. Exit.
@@ -61,6 +61,10 @@ async fn run() -> anyhow::Result<()> {
     eprintln!("worker {} ({worker_type}, agent {agent}) starting; workspace {}", worker.id, worker.workspace.display());
     match agent.as_str() {
         "command" => worker.serve(&CommandAdapter { command: env("FACTORY_AGENT_COMMAND")? }, heartbeat_interval).await,
+        "claude-code" => {
+            let bin = std::env::var("FACTORY_CLAUDE_BIN").unwrap_or_else(|_| "claude".into());
+            worker.serve(&ClaudeCodeAdapter { bin }, heartbeat_interval).await
+        }
         other => bail!("unknown FACTORY_AGENT {other:?}"),
     }
 }

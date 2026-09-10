@@ -1,0 +1,5 @@
+target
+.git
+*.db
+*.db-*
+factory-workspace
