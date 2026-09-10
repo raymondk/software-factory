@@ -1,4 +1,4 @@
-use api_client::{Client, Comment, CreateComment, CreateTicket, ListTickets, MoveTicket, UpdateTicket};
+use api_client::{Client, Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, MoveTicket, UpdateTicket};
 use serde::Serialize;
 use clap::{Parser, Subcommand};
 
@@ -22,6 +22,28 @@ enum Command {
         #[command(subcommand)]
         command: TicketCommand,
     },
+    /// Work with workers
+    Worker {
+        #[command(subcommand)]
+        command: WorkerCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorkerCommand {
+    /// Create a worker record; prints its id and token (human token)
+    Create {
+        #[arg(long = "type")]
+        worker_type: String,
+    },
+    /// List workers
+    List,
+    /// Mark a worker alive (worker token)
+    Register { id: String },
+    /// Heartbeat (worker token)
+    Heartbeat { id: String },
+    /// Pick up the next available ticket for the worker's type (worker token)
+    Poll { id: String },
 }
 
 #[derive(Subcommand)]
@@ -111,6 +133,24 @@ async fn main() -> anyhow::Result<()> {
             TicketCommand::Comment { id, body } => print(&client.add_comment(id, &CreateComment { body }).await?),
             TicketCommand::Comments { id } => client.list_comments(id).await?.iter().for_each(print_comment),
             TicketCommand::Resolve { id, cid } => print(&client.resolve_comment(id, cid).await?),
+        },
+        Command::Worker { command } => match command {
+            WorkerCommand::Create { worker_type } => print(&client.create_worker(&CreateWorker { worker_type }).await?),
+            WorkerCommand::List => {
+                for w in client.list_workers().await? {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        w.id,
+                        w.worker_type,
+                        w.status,
+                        w.last_heartbeat.as_deref().unwrap_or("-"),
+                        w.ticket.map(|t| format!("#{t}")).unwrap_or_else(|| "-".into())
+                    );
+                }
+            }
+            WorkerCommand::Register { id } => print(&client.register(&id).await?),
+            WorkerCommand::Heartbeat { id } => print(&client.heartbeat(&id).await?),
+            WorkerCommand::Poll { id } => print(&client.poll(&id).await?),
         },
     }
     Ok(())

@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 pub mod api;
 pub mod config;
 pub mod db;
 
+pub const STATES: [&str; 6] = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
+
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
-    pub token: String,
+    pub config: Arc<config::Config>,
 }

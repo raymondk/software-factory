@@ -70,6 +70,11 @@ impl Config {
         if config.orchestrator.token.is_empty() {
             bail!("orchestrator.token must not be empty");
         }
+        for (name, wt) in &config.worker_types {
+            if let Some(state) = wt.prompts.keys().find(|s| !crate::STATES.contains(&s.as_str())) {
+                bail!("worker_types.{name}.prompts: unknown state {state:?}");
+            }
+        }
         Ok(config)
     }
 }
@@ -94,5 +99,6 @@ mod tests {
         assert!(Config::parse(&EXAMPLE.replace("\"60s\"", "\"soon\"")).is_err());
         assert!(Config::parse(&EXAMPLE.replace("token = \"change-me\"", "token = \"\"")).is_err());
         assert!(Config::parse(&format!("{EXAMPLE}\n[typo]\nx = 1\n")).is_err());
+        assert!(Config::parse(&EXAMPLE.replace("in_progress = ", "bogus = ")).is_err());
     }
 }

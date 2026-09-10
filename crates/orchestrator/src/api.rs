@@ -1,18 +1,18 @@
-use api_client::{Comment, CreateComment, CreateTicket, ListTickets, MoveTicket, Ticket, UpdateTicket};
+use api_client::{Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, MoveTicket, NewWorker, PollResponse, Ticket, UpdateTicket, Worker};
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
-use sqlx::Connection;
+use sqlx::{Connection, SqliteExecutor};
 
-use crate::AppState;
+use crate::config::Config;
+use crate::{AppState, STATES};
 
 const UI: &str = include_str!("../ui/index.html");
 /// Neighbouring ranks closer than this trigger renormalization.
 const MIN_GAP: f64 = 1e-6;
-const STATES: [&str; 6] = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
 
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
@@ -21,6 +21,10 @@ pub fn router(state: AppState) -> Router {
         .route("/tickets/{id}/move", post(move_ticket))
         .route("/tickets/{id}/comments", get(list_comments).post(add_comment))
         .route("/tickets/{id}/comments/{cid}/resolve", post(resolve_comment))
+        .route("/workers", get(list_workers).post(create_worker))
+        .route("/workers/{id}/register", post(register))
+        .route("/workers/{id}/heartbeat", post(heartbeat))
+        .route("/workers/{id}/poll", post(poll))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().route("/", get(ui)).merge(api).with_state(state)
 }
@@ -29,12 +33,23 @@ pub fn router(state: AppState) -> Router {
 #[derive(Clone, Debug)]
 pub enum Caller {
     Human,
+    /// A worker, by id. May only act as itself and on tickets it holds.
+    Worker(String),
 }
 
 impl Caller {
     fn name(&self) -> &str {
         match self {
             Caller::Human => "human",
+            Caller::Worker(id) => id,
+        }
+    }
+
+    /// Worker-scoped endpoints: only that worker may call them.
+    fn require_worker(&self, id: &str) -> Result<(), ApiError> {
+        match self {
+            Caller::Worker(w) if w == id => Ok(()),
+            _ => Err(ApiError::Forbidden),
         }
     }
 }
@@ -44,17 +59,25 @@ async fn auth(State(state): State<AppState>, mut req: Request, next: Next) -> Re
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    if token == Some(state.token.as_str()) {
-        req.extensions_mut().insert(Caller::Human);
-        next.run(req).await
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or_default()
+        .to_string();
+    let caller = if token == state.config.orchestrator.token {
+        Caller::Human
     } else {
-        ApiError::Unauthorized.into_response()
-    }
+        let worker: Result<Option<(String,)>, _> = sqlx::query_as("SELECT id FROM workers WHERE token = ?1").bind(&token).fetch_optional(&state.pool).await;
+        match worker {
+            Ok(Some((id,))) => Caller::Worker(id),
+            Ok(None) => return ApiError::Unauthorized.into_response(),
+            Err(e) => return ApiError::Db(e).into_response(),
+        }
+    };
+    req.extensions_mut().insert(caller);
+    next.run(req).await
 }
 
 async fn ui(State(state): State<AppState>) -> Html<String> {
-    let token = serde_json::to_string(&state.token).unwrap().replace("</", "<\\/");
+    let token = serde_json::to_string(&state.config.orchestrator.token).unwrap().replace("</", "<\\/");
     Html(UI.replace("__TOKEN__", &token))
 }
 
@@ -197,16 +220,35 @@ async fn resolve_comment(State(state): State<AppState>, Path((id, cid)): Path<(i
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
 }
 
-async fn update_ticket(State(state): State<AppState>, Path(id): Path<i64>, Json(req): Json<UpdateTicket>) -> Result<Json<Ticket>, ApiError> {
+/// Spec 3.4: a ticket may be modified by a human or by the worker holding it.
+async fn authorize(caller: &Caller, db: impl SqliteExecutor<'_>, id: i64) -> Result<(), ApiError> {
+    let row: Option<(Option<String>,)> = sqlx::query_as("SELECT assignee FROM tickets WHERE id = ?1").bind(id).fetch_optional(db).await?;
+    let (assignee,) = row.ok_or(ApiError::NotFound)?;
+    match caller {
+        Caller::Human => Ok(()),
+        Caller::Worker(w) if assignee.as_deref() == Some(w) => Ok(()),
+        Caller::Worker(_) => Err(ApiError::Forbidden),
+    }
+}
+
+async fn update_ticket(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateTicket>,
+) -> Result<Json<Ticket>, ApiError> {
     if req.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
         return Err(ApiError::BadRequest("title must not be empty"));
     }
     if req.state.as_deref().is_some_and(|s| !STATES.contains(&s)) {
         return Err(ApiError::BadRequest("invalid state"));
     }
+    authorize(&caller, &state.pool, id).await?;
+    // Spec 3.2: a state change clears the assignee unless the same patch sets it.
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET title = COALESCE(?2, title), description = COALESCE(?3, description), \
-         state = COALESCE(?4, state), assignee = CASE WHEN ?5 THEN ?6 ELSE assignee END, \
+         state = COALESCE(?4, state), \
+         assignee = CASE WHEN ?5 THEN ?6 WHEN ?4 IS NOT NULL AND ?4 != state THEN NULL ELSE assignee END, \
          links = COALESCE(?7, links), updated_at = {NOW} WHERE id = ?1 RETURNING {COLUMNS}"
     ))
     .bind(id)
@@ -221,7 +263,12 @@ async fn update_ticket(State(state): State<AppState>, Path(id): Path<i64>, Json(
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
 }
 
-async fn move_ticket(State(state): State<AppState>, Path(id): Path<i64>, Json(req): Json<MoveTicket>) -> Result<Json<Ticket>, ApiError> {
+async fn move_ticket(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<i64>,
+    Json(req): Json<MoveTicket>,
+) -> Result<Json<Ticket>, ApiError> {
     let (target, before) = match (req.before, req.after) {
         (Some(t), None) => (t, true),
         (None, Some(t)) => (t, false),
@@ -233,6 +280,7 @@ async fn move_ticket(State(state): State<AppState>, Path(id): Path<i64>, Json(re
     let mut conn = state.pool.acquire().await?;
     // IMMEDIATE takes the write lock up front so concurrent moves see each other's ranks.
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
+    authorize(&caller, &mut *tx, id).await?;
     let mut order: Vec<(i64, f64)> = sqlx::query_as("SELECT id, rank FROM tickets ORDER BY rank ASC, id ASC").fetch_all(&mut *tx).await?;
     if !order.iter().any(|(i, _)| *i == id) || !order.iter().any(|(i, _)| *i == target) {
         return Err(ApiError::NotFound);
@@ -268,8 +316,125 @@ async fn move_ticket(State(state): State<AppState>, Path(id): Path<i64>, Json(re
     Ok(Json(row.into()))
 }
 
+#[derive(sqlx::FromRow)]
+struct WorkerRow {
+    id: String,
+    worker_type: String,
+    status: String,
+    created_at: String,
+    last_heartbeat: Option<String>,
+    ticket: Option<i64>,
+}
+
+impl From<WorkerRow> for Worker {
+    fn from(r: WorkerRow) -> Worker {
+        Worker { id: r.id, worker_type: r.worker_type, status: r.status, created_at: r.created_at, last_heartbeat: r.last_heartbeat, ticket: r.ticket }
+    }
+}
+
+/// Worker columns for the API: everything but the token, plus the ticket it holds.
+const WORKER_COLUMNS: &str = "id, worker_type, status, created_at, last_heartbeat, \
+    (SELECT t.id FROM tickets t WHERE t.assignee = workers.id ORDER BY t.rank ASC, t.id ASC LIMIT 1) AS ticket";
+
+/// Creates a worker record with a fresh id and token. Also used by the scheduler.
+pub async fn new_worker(db: impl SqliteExecutor<'_>, config: &Config, worker_type: &str) -> Result<NewWorker, ApiError> {
+    if !config.worker_types.contains_key(worker_type) {
+        return Err(ApiError::BadRequest("unknown worker type"));
+    }
+    let (id, worker_type, token): (String, String, String) = sqlx::query_as(&format!(
+        "INSERT INTO workers (id, worker_type, token, status, created_at) \
+         VALUES ('w-' || lower(hex(randomblob(4))), ?1, lower(hex(randomblob(24))), 'starting', {NOW}) \
+         RETURNING id, worker_type, token"
+    ))
+    .bind(worker_type)
+    .fetch_one(db)
+    .await?;
+    Ok(NewWorker { id, worker_type, token })
+}
+
+async fn create_worker(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Json(req): Json<CreateWorker>,
+) -> Result<(StatusCode, Json<NewWorker>), ApiError> {
+    if !matches!(caller, Caller::Human) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok((StatusCode::CREATED, Json(new_worker(&state.pool, &state.config, &req.worker_type).await?)))
+}
+
+async fn list_workers(State(state): State<AppState>) -> Result<Json<Vec<Worker>>, ApiError> {
+    let rows: Vec<WorkerRow> =
+        sqlx::query_as(&format!("SELECT {WORKER_COLUMNS} FROM workers ORDER BY created_at ASC, id ASC")).fetch_all(&state.pool).await?;
+    Ok(Json(rows.into_iter().map(Worker::from).collect()))
+}
+
+async fn set_status(db: impl SqliteExecutor<'_>, id: &str, status: &str) -> Result<Worker, ApiError> {
+    let row: Option<WorkerRow> =
+        sqlx::query_as(&format!("UPDATE workers SET status = ?2, last_heartbeat = {NOW} WHERE id = ?1 RETURNING {WORKER_COLUMNS}"))
+            .bind(id)
+            .bind(status)
+            .fetch_optional(db)
+            .await?;
+    row.map(Worker::from).ok_or(ApiError::NotFound)
+}
+
+async fn register(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
+    caller.require_worker(&id)?;
+    Ok(Json(set_status(&state.pool, &id, "idle").await?))
+}
+
+async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
+    caller.require_worker(&id)?;
+    let row: Option<WorkerRow> = sqlx::query_as(&format!("UPDATE workers SET last_heartbeat = {NOW} WHERE id = ?1 RETURNING {WORKER_COLUMNS}"))
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?;
+    row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
+}
+
+/// Hands the worker the lowest-ranked unassigned ticket in a state its type has a prompt for. 204 when there is none.
+async fn poll(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Response, ApiError> {
+    caller.require_worker(&id)?;
+    let mut conn = state.pool.acquire().await?;
+    // IMMEDIATE serializes polls so two workers never pick the same ticket.
+    let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
+    let (worker_type,): (String,) =
+        sqlx::query_as("SELECT worker_type FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
+    let prompts = state.config.worker_types.get(&worker_type).map(|w| &w.prompts).ok_or(ApiError::BadRequest("unknown worker type"))?;
+    let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
+    let row: Option<Row> = sqlx::query_as(&format!(
+        "UPDATE tickets SET assignee = ?1, updated_at = {NOW} WHERE id = \
+         (SELECT id FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?2)) ORDER BY rank ASC, id ASC LIMIT 1) \
+         RETURNING {COLUMNS}"
+    ))
+    .bind(&id)
+    .bind(format!("[{}]", states.join(",")))
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(row) = row else {
+        set_status(&mut *tx, &id, "idle").await?;
+        tx.commit().await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    set_status(&mut *tx, &id, "busy").await?;
+    tx.commit().await?;
+    let ticket: Ticket = row.into();
+    let prompt = render(&prompts[&ticket.state], &ticket);
+    Ok(Json(PollResponse { ticket, prompt, repos: state.config.project.repos.clone() }).into_response())
+}
+
+fn render(template: &str, t: &Ticket) -> String {
+    template
+        .replace("{{ticket.id}}", &t.id.to_string())
+        .replace("{{ticket.title}}", &t.title)
+        .replace("{{ticket.description}}", &t.description)
+        .replace("{{ticket.state}}", &t.state)
+}
+
 pub enum ApiError {
     Unauthorized,
+    Forbidden,
     NotFound,
     BadRequest(&'static str),
     Db(sqlx::Error),
@@ -285,6 +450,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, msg) = match self {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
+            ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.to_string()),
             ApiError::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

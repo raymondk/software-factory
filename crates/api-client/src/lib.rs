@@ -73,6 +73,38 @@ pub struct ListTickets {
     pub assignee: Option<String>,
 }
 
+/// A worker as listed by the orchestrator. `ticket` is the ticket it currently holds. Never carries the token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Worker {
+    pub id: String,
+    pub worker_type: String,
+    /// One of: starting, idle, busy, dead
+    pub status: String,
+    pub created_at: String,
+    pub last_heartbeat: Option<String>,
+    pub ticket: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateWorker {
+    pub worker_type: String,
+}
+
+/// Returned once, at creation: the only time the token is visible.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewWorker {
+    pub id: String,
+    pub worker_type: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PollResponse {
+    pub ticket: Ticket,
+    pub prompt: String,
+    pub repos: Vec<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("http error: {0}")]
@@ -136,12 +168,46 @@ impl Client {
         Self::send(r).await
     }
 
+    pub async fn create_worker(&self, req: &CreateWorker) -> Result<NewWorker, Error> {
+        let r = self.http.post(format!("{}/workers", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn list_workers(&self) -> Result<Vec<Worker>, Error> {
+        let r = self.http.get(format!("{}/workers", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    pub async fn register(&self, id: &str) -> Result<Worker, Error> {
+        let r = self.http.post(format!("{}/workers/{id}/register", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    pub async fn heartbeat(&self, id: &str) -> Result<Worker, Error> {
+        let r = self.http.post(format!("{}/workers/{id}/heartbeat", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    /// `None` when no ticket is available.
+    pub async fn poll(&self, id: &str) -> Result<Option<PollResponse>, Error> {
+        let r = self.http.post(format!("{}/workers/{id}/poll", self.base)).bearer_auth(&self.token);
+        let resp = Self::check(r).await?;
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        Ok(Some(resp.json().await?))
+    }
+
     async fn send<T: for<'de> Deserialize<'de>>(r: reqwest::RequestBuilder) -> Result<T, Error> {
+        Ok(Self::check(r).await?.json().await?)
+    }
+
+    async fn check(r: reqwest::RequestBuilder) -> Result<reqwest::Response, Error> {
         let resp = r.send().await?;
         let status = resp.status();
         if !status.is_success() {
             return Err(Error::Api { status: status.as_u16(), body: resp.text().await.unwrap_or_default() });
         }
-        Ok(resp.json().await?)
+        Ok(resp)
     }
 }

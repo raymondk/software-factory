@@ -14,6 +14,8 @@
   #filter { margin-bottom: .5rem; }
   pre { white-space: pre-wrap; }
   #detail:empty::before { content: "Select a ticket."; color: #888; }
+  #workers-section { grid-column: 1 / -1; }
+  #workers tr { cursor: default; }
   .comment { border-top: 1px solid #ddd; padding: .5rem 0; }
   .comment small { color: #888; }
   .comment.resolved { color: #999; text-decoration: line-through; }
@@ -32,6 +34,13 @@
   </table>
 </section>
 <section id="detail"></section>
+<section id="workers-section">
+  <h3>Workers</h3>
+  <table>
+    <thead><tr><th>Id</th><th>Type</th><th>Status</th><th>Last heartbeat</th><th>Ticket</th></tr></thead>
+    <tbody id="workers"></tbody>
+  </table>
+</section>
 <script>
   const TOKEN = __TOKEN__;
   const headers = { Authorization: "Bearer " + TOKEN, "Content-Type": "application/json" };
@@ -61,6 +70,17 @@
       tr.onclick = () => show(t.id);
       tbody.append(tr);
     });
+  }
+
+  async function listWorkers() {
+    const tbody = document.getElementById("workers");
+    tbody.replaceChildren();
+    for (const w of await api("/workers")) {
+      const tr = el("tr");
+      for (const v of [w.id, w.worker_type, w.status, w.last_heartbeat ?? "", w.ticket ? "#" + w.ticket : ""]) tr.append(el("td", v));
+      if (w.ticket) { tr.style.cursor = "pointer"; tr.onclick = () => show(w.ticket); }
+      tbody.append(tr);
+    }
   }
 
   function moveButton(label, body, id) {
@@ -137,5 +157,6 @@
     show(t.id);
   };
 
-  list().catch(e => alert(e.message));
+  list().then(listWorkers).catch(e => alert(e.message));
+  setInterval(() => listWorkers().catch(() => {}), 5000);
 </script>

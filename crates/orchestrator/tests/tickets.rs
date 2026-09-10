@@ -1,18 +1,12 @@
 use std::time::Duration;
 
 use api_client::{Client, CreateComment, CreateTicket, Error, ListTickets, MoveTicket, UpdateTicket};
-use orchestrator::{api, db, AppState};
 
-const TOKEN: &str = "secret";
+mod common;
+use common::TOKEN;
 
 async fn serve() -> (String, tempfile::TempDir) {
-    let dir = tempfile::tempdir().unwrap();
-    let pool = db::open(&dir.path().join("test.db")).await.unwrap();
-    let router = api::router(AppState { pool, token: TOKEN.into() });
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    (url, dir)
+    common::serve(include_str!("../../../factory.example.toml")).await
 }
 
 fn new(title: &str) -> CreateTicket {
