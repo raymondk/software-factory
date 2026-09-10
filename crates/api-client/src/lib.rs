@@ -11,7 +11,22 @@ pub struct Ticket {
     pub created_at: String,
     pub updated_at: String,
     pub links: Vec<String>,
-    pub comments: Vec<serde_json::Value>,
+    pub comments: Vec<Comment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Comment {
+    pub id: i64,
+    pub ticket_id: i64,
+    pub author: String,
+    pub body: String,
+    pub created_at: String,
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateComment {
+    pub body: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +118,21 @@ impl Client {
 
     pub async fn get_ticket(&self, id: i64) -> Result<Ticket, Error> {
         let r = self.http.get(format!("{}/tickets/{id}", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    pub async fn list_comments(&self, id: i64) -> Result<Vec<Comment>, Error> {
+        let r = self.http.get(format!("{}/tickets/{id}/comments", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    pub async fn add_comment(&self, id: i64, req: &CreateComment) -> Result<Comment, Error> {
+        let r = self.http.post(format!("{}/tickets/{id}/comments", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn resolve_comment(&self, id: i64, cid: i64) -> Result<Comment, Error> {
+        let r = self.http.post(format!("{}/tickets/{id}/comments/{cid}/resolve", self.base)).bearer_auth(&self.token);
         Self::send(r).await
     }
 

@@ -444,6 +444,7 @@ dependencies = [
  "anyhow",
  "api-client",
  "clap",
+ "serde",
  "serde_json",
  "tokio",
 ]

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use api_client::{Client, CreateTicket, Error, ListTickets, MoveTicket, UpdateTicket};
+use api_client::{Client, CreateComment, CreateTicket, Error, ListTickets, MoveTicket, UpdateTicket};
 use orchestrator::{api, db, AppState};
 
 const TOKEN: &str = "secret";
@@ -269,4 +269,61 @@ async fn move_errors() {
         }
     }
     assert_eq!(order(&client).await, vec![a, b]);
+}
+
+fn comment(body: &str) -> CreateComment {
+    CreateComment { body: body.into() }
+}
+
+#[tokio::test]
+async fn comments_add_list_resolve() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    let t = client.create_ticket(&new("a")).await.unwrap();
+    let other = client.create_ticket(&new("b")).await.unwrap();
+    assert!(client.list_comments(t.id).await.unwrap().is_empty());
+
+    let first = client.add_comment(t.id, &comment("first")).await.unwrap();
+    assert_eq!((first.ticket_id, first.author.as_str(), first.body.as_str(), first.resolved), (t.id, "human", "first", false));
+    tick().await;
+    let second = client.add_comment(t.id, &comment("second")).await.unwrap();
+    client.add_comment(other.id, &comment("elsewhere")).await.unwrap();
+    assert!(second.created_at > first.created_at);
+
+    let ids = |list: Vec<api_client::Comment>| list.into_iter().map(|c| c.id).collect::<Vec<_>>();
+    assert_eq!(ids(client.list_comments(t.id).await.unwrap()), vec![first.id, second.id]);
+
+    let resolved = client.resolve_comment(t.id, first.id).await.unwrap();
+    assert!(resolved.resolved && resolved.id == first.id);
+    // Stays in the thread, and the ticket embeds it.
+    let got = client.get_ticket(t.id).await.unwrap();
+    assert_eq!(got.comments.iter().map(|c| (c.id, c.resolved)).collect::<Vec<_>>(), vec![(first.id, true), (second.id, false)]);
+    assert_eq!(got.comments[1].body, "second");
+    // The list endpoint does not embed threads.
+    assert!(client.list_tickets(&Default::default()).await.unwrap().iter().all(|t| t.comments.is_empty()));
+}
+
+#[tokio::test]
+async fn comment_errors() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    let t = client.create_ticket(&new("a")).await.unwrap();
+    let other = client.create_ticket(&new("b")).await.unwrap();
+    let c = client.add_comment(t.id, &comment("x")).await.unwrap();
+    let status = |r: Result<api_client::Comment, Error>| match r {
+        Err(Error::Api { status, .. }) => status,
+        other => panic!("expected error, got {other:?}"),
+    };
+    assert_eq!(status(client.add_comment(t.id, &comment("")).await), 400);
+    assert_eq!(status(client.add_comment(t.id, &comment("  \n")).await), 400);
+    assert_eq!(status(client.add_comment(9999, &comment("x")).await), 404);
+    assert_eq!(status(client.resolve_comment(t.id, 9999).await), 404);
+    assert_eq!(status(client.resolve_comment(9999, c.id).await), 404);
+    assert_eq!(status(client.resolve_comment(other.id, c.id).await), 404);
+    match client.list_comments(9999).await {
+        Err(Error::Api { status: 404, .. }) => {}
+        other => panic!("expected 404, got {other:?}"),
+    }
+    assert_eq!(client.list_comments(t.id).await.unwrap().len(), 1);
+    assert!(!client.get_ticket(t.id).await.unwrap().comments[0].resolved);
 }

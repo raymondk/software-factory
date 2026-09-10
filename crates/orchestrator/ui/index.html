@@ -14,6 +14,9 @@
   #filter { margin-bottom: .5rem; }
   pre { white-space: pre-wrap; }
   #detail:empty::before { content: "Select a ticket."; color: #888; }
+  .comment { border-top: 1px solid #ddd; padding: .5rem 0; }
+  .comment small { color: #888; }
+  .comment.resolved { color: #999; text-decoration: line-through; }
 </style>
 <h1>Software Factory</h1>
 <section>
@@ -88,11 +91,38 @@
       await list();
       show(t.id);
     };
+    const thread = el("section");
+    for (const c of t.comments) {
+      const div = el("div");
+      div.className = "comment" + (c.resolved ? " resolved" : "");
+      const meta = el("small", `${c.author} · ${c.created_at} `);
+      if (!c.resolved) {
+        const resolve = el("button", "Resolve");
+        resolve.onclick = async () => {
+          await api(`/tickets/${t.id}/comments/${c.id}/resolve`, { method: "POST" }).catch(e => alert(e.message));
+          show(t.id);
+        };
+        meta.append(resolve);
+      }
+      div.append(meta, el("pre", c.body));
+      thread.append(div);
+    }
+    const commentForm = el("form");
+    const body = Object.assign(el("textarea"), { name: "body", rows: 3, placeholder: "Comment", required: true });
+    commentForm.append(body, el("button", "Comment"));
+    commentForm.onsubmit = async e => {
+      e.preventDefault();
+      await api("/tickets/" + t.id + "/comments", { method: "POST", body: JSON.stringify({ body: body.value }) }).catch(e => alert(e.message));
+      show(t.id);
+    };
     d.replaceChildren(
       el("h2", "#" + t.id + " " + t.title),
       el("p", `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`),
       el("p", `created: ${t.created_at} · updated: ${t.updated_at}`),
       form,
+      el("h3", "Comments"),
+      thread,
+      commentForm,
     );
   }
 

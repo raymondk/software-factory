@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 api-client = { path = "../api-client" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

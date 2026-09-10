@@ -1,10 +1,10 @@
-use api_client::{CreateTicket, ListTickets, MoveTicket, Ticket, UpdateTicket};
+use api_client::{Comment, CreateComment, CreateTicket, ListTickets, MoveTicket, Ticket, UpdateTicket};
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use sqlx::Connection;
 
 use crate::AppState;
@@ -19,17 +19,34 @@ pub fn router(state: AppState) -> Router {
         .route("/tickets", get(list_tickets).post(create_ticket))
         .route("/tickets/{id}", get(get_ticket).patch(update_ticket))
         .route("/tickets/{id}/move", post(move_ticket))
+        .route("/tickets/{id}/comments", get(list_comments).post(add_comment))
+        .route("/tickets/{id}/comments/{cid}/resolve", post(resolve_comment))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().route("/", get(ui)).merge(api).with_state(state)
 }
 
-async fn auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
+/// Who is making the request, as established by `auth`. Handlers read it via `Extension<Caller>`.
+#[derive(Clone, Debug)]
+pub enum Caller {
+    Human,
+}
+
+impl Caller {
+    fn name(&self) -> &str {
+        match self {
+            Caller::Human => "human",
+        }
+    }
+}
+
+async fn auth(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let token = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
     if token == Some(state.token.as_str()) {
+        req.extensions_mut().insert(Caller::Human);
         next.run(req).await
     } else {
         ApiError::Unauthorized.into_response()
@@ -71,7 +88,24 @@ impl From<Row> for Ticket {
     }
 }
 
+#[derive(sqlx::FromRow)]
+struct CommentRow {
+    id: i64,
+    ticket_id: i64,
+    author: String,
+    body: String,
+    created_at: String,
+    resolved: bool,
+}
+
+impl From<CommentRow> for Comment {
+    fn from(r: CommentRow) -> Comment {
+        Comment { id: r.id, ticket_id: r.ticket_id, author: r.author, body: r.body, created_at: r.created_at, resolved: r.resolved }
+    }
+}
+
 const COLUMNS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links";
+const COMMENT_COLUMNS: &str = "id, ticket_id, author, body, created_at, resolved";
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTicket>) -> Result<(StatusCode, Json<Ticket>), ApiError> {
@@ -90,6 +124,7 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
     Ok((StatusCode::CREATED, Json(row.into())))
 }
 
+// The list leaves `comments` empty; only GET /tickets/{id} embeds the thread, to avoid a query per ticket.
 async fn list_tickets(State(state): State<AppState>, Query(filter): Query<ListTickets>) -> Result<Json<Vec<Ticket>>, ApiError> {
     let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT {COLUMNS} FROM tickets WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR assignee = ?2) \
@@ -107,6 +142,58 @@ async fn get_ticket(State(state): State<AppState>, Path(id): Path<i64>) -> Resul
         .bind(id)
         .fetch_optional(&state.pool)
         .await?;
+    let mut ticket: Ticket = row.ok_or(ApiError::NotFound)?.into();
+    ticket.comments = comments_of(&state, id).await?;
+    Ok(Json(ticket))
+}
+
+async fn comments_of(state: &AppState, ticket_id: i64) -> Result<Vec<Comment>, ApiError> {
+    let rows: Vec<CommentRow> =
+        sqlx::query_as(&format!("SELECT {COMMENT_COLUMNS} FROM comments WHERE ticket_id = ?1 ORDER BY created_at ASC, id ASC"))
+            .bind(ticket_id)
+            .fetch_all(&state.pool)
+            .await?;
+    Ok(rows.into_iter().map(Comment::from).collect())
+}
+
+async fn ticket_exists(state: &AppState, id: i64) -> Result<(), ApiError> {
+    let found: Option<(i64,)> = sqlx::query_as("SELECT id FROM tickets WHERE id = ?1").bind(id).fetch_optional(&state.pool).await?;
+    found.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+async fn list_comments(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<Vec<Comment>>, ApiError> {
+    ticket_exists(&state, id).await?;
+    Ok(Json(comments_of(&state, id).await?))
+}
+
+async fn add_comment(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<i64>,
+    Json(req): Json<CreateComment>,
+) -> Result<(StatusCode, Json<Comment>), ApiError> {
+    if req.body.trim().is_empty() {
+        return Err(ApiError::BadRequest("body must not be empty"));
+    }
+    ticket_exists(&state, id).await?;
+    let row: CommentRow = sqlx::query_as(&format!(
+        "INSERT INTO comments (ticket_id, author, body, created_at) VALUES (?1, ?2, ?3, {NOW}) RETURNING {COMMENT_COLUMNS}"
+    ))
+    .bind(id)
+    .bind(caller.name())
+    .bind(&req.body)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok((StatusCode::CREATED, Json(row.into())))
+}
+
+async fn resolve_comment(State(state): State<AppState>, Path((id, cid)): Path<(i64, i64)>) -> Result<Json<Comment>, ApiError> {
+    let row: Option<CommentRow> =
+        sqlx::query_as(&format!("UPDATE comments SET resolved = 1 WHERE id = ?1 AND ticket_id = ?2 RETURNING {COMMENT_COLUMNS}"))
+            .bind(cid)
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
 }
 

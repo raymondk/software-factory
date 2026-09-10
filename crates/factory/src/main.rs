@@ -1,4 +1,5 @@
-use api_client::{Client, CreateTicket, ListTickets, MoveTicket, Ticket, UpdateTicket};
+use api_client::{Client, Comment, CreateComment, CreateTicket, ListTickets, MoveTicket, UpdateTicket};
+use serde::Serialize;
 use clap::{Parser, Subcommand};
 
 /// CLI for the Software Factory orchestrator.
@@ -67,6 +68,16 @@ enum TicketCommand {
         #[arg(long, value_name = "ID")]
         after: Option<i64>,
     },
+    /// Add a comment to a ticket
+    Comment {
+        id: i64,
+        #[arg(long)]
+        body: String,
+    },
+    /// List the comments on a ticket
+    Comments { id: i64 },
+    /// Resolve a comment
+    Resolve { id: i64, cid: i64 },
 }
 
 #[tokio::main]
@@ -97,11 +108,18 @@ async fn main() -> anyhow::Result<()> {
                 print(&client.update_ticket(id, &UpdateTicket { title, description, state, assignee, links }).await?)
             }
             TicketCommand::Move { id, before, after } => print(&client.move_ticket(id, &MoveTicket { before, after }).await?),
+            TicketCommand::Comment { id, body } => print(&client.add_comment(id, &CreateComment { body }).await?),
+            TicketCommand::Comments { id } => client.list_comments(id).await?.iter().for_each(print_comment),
+            TicketCommand::Resolve { id, cid } => print(&client.resolve_comment(id, cid).await?),
         },
     }
     Ok(())
 }
 
-fn print(t: &Ticket) {
+fn print<T: Serialize>(t: &T) {
     println!("{}", serde_json::to_string_pretty(t).unwrap());
+}
+
+fn print_comment(c: &Comment) {
+    println!("#{}\t{}\t{}\t{}{}", c.id, c.created_at, c.author, if c.resolved { "[resolved] " } else { "" }, c.body);
 }
