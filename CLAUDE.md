@@ -7,3 +7,10 @@ Status: no code yet. The design is in `SPEC.md`. Next step is breaking it into t
 - Write as little as possible. Do not add docs, structure, or conventions that were not asked for.
 - Use `gh-axi` for GitHub operations.
 - Commit and push only when asked.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `raymondk/software-factory-2` via `gh-axi`. See `docs/agents/issue-tracker.md`.
+
