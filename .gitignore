@@ -1,0 +1,14 @@
+# Claude Code local/personal settings
+.claude/
+
+# Synced skill content (regenerated from skills-lock.json)
+.agents/skills/
+
+# OS
+.DS_Store
+
+# Rust
+/target
+
+# A Worker's Workspace, when one is run from the repository root
+/factory-workspace
