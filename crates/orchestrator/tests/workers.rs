@@ -247,15 +247,39 @@ async fn state_change_clears_assignee() {
     let t = wc.update_ticket(id, &UpdateTicket { description: Some("d".into()), ..Default::default() }).await.unwrap();
     assert_eq!(t.assignee.as_deref(), Some(w.id.as_str()));
     // State change: cleared, and the worker no longer holds it.
-    let t = wc.update_ticket(id, &set_state("in_progress")).await.unwrap();
-    assert_eq!((t.state.as_str(), t.assignee), ("in_progress", None));
-    assert_eq!(status(wc.update_ticket(id, &set_state("in_review")).await), 403);
+    let t = wc.update_ticket(id, &set_state("in_review")).await.unwrap();
+    assert_eq!((t.state.as_str(), t.assignee), ("in_review", None));
+    assert_eq!(status(wc.update_ticket(id, &set_state("done")).await), 403);
     assert_eq!(human.list_workers().await.unwrap()[0].ticket, None);
     // Explicit assignee in the same patch wins.
     let t = human.update_ticket(id, &UpdateTicket { state: Some("in_review".into()), assignee: Some(Some("bob".into())), ..Default::default() }).await.unwrap();
     assert_eq!((t.state.as_str(), t.assignee.as_deref()), ("in_review", Some("bob")));
     let t = human.update_ticket(id, &set_state("done")).await.unwrap();
     assert_eq!(t.assignee, None);
+}
+
+#[tokio::test]
+async fn worker_keeps_ticket_it_moves_to_in_progress() {
+    let (url, _dir) = serve().await;
+    let human = Client::new(&url, TOKEN);
+    let (w, wc) = worker(&url, &human, "default").await;
+    let (other, oc) = worker(&url, &human, "default").await;
+    let id = ticket(&human, "a", "ready").await;
+    assert_eq!(wc.poll(&w.id).await.unwrap().unwrap().ticket.id, id);
+
+    let t = wc.update_ticket(id, &set_state("in_progress")).await.unwrap();
+    assert_eq!((t.state.as_str(), t.assignee.as_deref()), ("in_progress", Some(w.id.as_str())));
+    assert!(oc.poll(&other.id).await.unwrap().is_none(), "held in_progress ticket is not handed out");
+    assert_eq!(status(oc.update_ticket(id, &set_state("done")).await), 403);
+    // A human moving it to in_progress still clears it.
+    human.update_ticket(id, &set_state("ready")).await.unwrap();
+    human.update_ticket(id, &UpdateTicket { assignee: Some(Some(w.id.clone())), ..Default::default() }).await.unwrap();
+    assert_eq!(human.update_ticket(id, &set_state("in_progress")).await.unwrap().assignee, None);
+    human.update_ticket(id, &UpdateTicket { assignee: Some(Some(w.id.clone())), ..Default::default() }).await.unwrap();
+    // Any other state change clears it.
+    let t = wc.update_ticket(id, &set_state("in_review")).await.unwrap();
+    assert_eq!((t.state.as_str(), t.assignee), ("in_review", None));
+    assert_eq!(status(wc.update_ticket(id, &set_state("done")).await), 403);
 }
 
 #[tokio::test]

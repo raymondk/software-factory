@@ -48,7 +48,7 @@ Transitions are not restricted by the orchestrator beyond the ACL. Prompts tell 
 ### 3.2 Assignee
 
 - Set to the worker's id when it picks up a ticket.
-- Cleared when the worker moves the ticket to another state, or when the orchestrator reaps the worker.
+- Cleared when the worker moves the ticket to another state, except to `in_progress`, which it keeps holding; also cleared when the orchestrator reaps the worker.
 - A ticket in a workable state with no assignee is available to be picked up.
 
 ### 3.3 Ordering

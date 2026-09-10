@@ -223,6 +223,19 @@ async fn left_in_progress_is_failed() {
 }
 
 #[tokio::test]
+async fn left_in_progress_without_explicit_assignee_is_failed() {
+    let f = Fixture::new().await;
+    let id = f.ticket("lazy").await;
+    let (child, wid, _) = f.worker("patch '{\"state\":\"in_progress\"}'\nexit 0\n").await;
+    let t = f.wait_for(id, |t| t.state == "failed").await;
+    assert_eq!(t.assignee, None);
+    assert_eq!(t.comments.len(), 1);
+    assert_eq!(t.comments[0].author, wid);
+    assert_eq!(t.comments[0].body, "Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 0)");
+    stop(child).await;
+}
+
+#[tokio::test]
 async fn exits_when_token_stops_authenticating() {
     let f = Fixture::new().await;
     let (mut child, wid, _) = f.worker("exit 0\n").await;

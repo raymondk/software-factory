@@ -249,11 +249,13 @@ async fn update_ticket(
         return Err(ApiError::BadRequest("invalid state"));
     }
     authorize(&caller, &state.pool, id).await?;
-    // Spec 3.2: a state change clears the assignee unless the same patch sets it.
+    // Spec 3.2: a state change clears the assignee unless the same patch sets it, or the holding worker moves it to
+    // in_progress (authorize guarantees a worker caller is the assignee).
+    let keep = matches!(caller, Caller::Worker(_)) && req.state.as_deref() == Some("in_progress");
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET title = COALESCE(?2, title), description = COALESCE(?3, description), \
          state = COALESCE(?4, state), \
-         assignee = CASE WHEN ?5 THEN ?6 WHEN ?4 IS NOT NULL AND ?4 != state THEN NULL ELSE assignee END, \
+         assignee = CASE WHEN ?5 THEN ?6 WHEN ?4 IS NOT NULL AND ?4 != state AND NOT ?8 THEN NULL ELSE assignee END, \
          links = COALESCE(?7, links), updated_at = {NOW} WHERE id = ?1 RETURNING {COLUMNS}"
     ))
     .bind(id)
@@ -263,6 +265,7 @@ async fn update_ticket(
     .bind(req.assignee.is_some())
     .bind(req.assignee.clone().flatten())
     .bind(req.links.as_ref().map(|l| serde_json::to_string(l).unwrap()))
+    .bind(keep)
     .fetch_optional(&state.pool)
     .await?;
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
