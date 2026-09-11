@@ -10,7 +10,7 @@ async fn serve() -> (String, tempfile::TempDir) {
 }
 
 fn new(title: &str) -> CreateTicket {
-    CreateTicket { title: title.into(), description: format!("about {title}") }
+    CreateTicket { title: title.into(), description: format!("about {title}"), state: None }
 }
 
 #[tokio::test]
@@ -35,6 +35,13 @@ async fn create_list_get() {
 
     let got = client.get_ticket(b.id).await.unwrap();
     assert_eq!(got.title, "b");
+
+    let ready = client.create_ticket(&CreateTicket { state: Some("ready".into()), ..new("d") }).await.unwrap();
+    assert_eq!(ready.state, "ready");
+    match client.create_ticket(&CreateTicket { state: Some("bogus".into()), ..new("e") }).await {
+        Err(Error::Api { status: 400, .. }) => {}
+        other => panic!("expected 400, got {other:?}"),
+    }
 
     match client.get_ticket(9999).await {
         Err(Error::Api { status: 404, .. }) => {}

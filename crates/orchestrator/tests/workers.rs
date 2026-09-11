@@ -50,7 +50,7 @@ async fn worker(url: &str, human: &Client, worker_type: &str) -> (NewWorker, Cli
 }
 
 async fn ticket(human: &Client, title: &str, state: &str) -> i64 {
-    let t = human.create_ticket(&CreateTicket { title: title.into(), description: format!("about {title}") }).await.unwrap();
+    let t = human.create_ticket(&CreateTicket { title: title.into(), description: format!("about {title}"), state: None }).await.unwrap();
     human.update_ticket(t.id, &UpdateTicket { state: Some(state.into()), ..Default::default() }).await.unwrap();
     t.id
 }
@@ -233,7 +233,7 @@ async fn acl_workers_modify_only_held_tickets() {
     assert_eq!(wc.move_ticket(mine, &MoveTicket { after: Some(theirs), ..Default::default() }).await.unwrap().rank, 3.0);
 
     // Anyone may create tickets and comment on and resolve comments on any ticket; author is the worker id.
-    let created = oc.create_ticket(&CreateTicket { title: "from worker".into(), description: String::new() }).await.unwrap();
+    let created = oc.create_ticket(&CreateTicket { title: "from worker".into(), description: String::new(), state: None }).await.unwrap();
     assert_eq!(created.state, "todo");
     let c = oc.add_comment(mine, &CreateComment { body: "hi".into() }).await.unwrap();
     assert_eq!(c.author, other.id);

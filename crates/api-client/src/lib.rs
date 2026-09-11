@@ -38,6 +38,9 @@ pub struct CreateTicket {
     pub title: String,
     #[serde(default)]
     pub description: String,
+    /// Defaults to `todo`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 /// Partial update. `None` leaves a field untouched; `assignee: Some(None)` clears it.

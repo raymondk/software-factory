@@ -146,13 +146,18 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
     if req.title.trim().is_empty() {
         return Err(ApiError::BadRequest("title must not be empty"));
     }
+    let state_name = req.state.as_deref().unwrap_or("todo");
+    if !STATES.contains(&state_name) {
+        return Err(ApiError::BadRequest("invalid state"));
+    }
     let row: Row = sqlx::query_as(&format!(
         "INSERT INTO tickets (title, description, state, rank, created_at, updated_at) \
-         VALUES (?1, ?2, 'todo', (SELECT COALESCE(MAX(rank), 0) + 1 FROM tickets), {NOW}, {NOW}) \
+         VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(rank), 0) + 1 FROM tickets), {NOW}, {NOW}) \
          RETURNING {COLUMNS}"
     ))
     .bind(&req.title)
     .bind(&req.description)
+    .bind(state_name)
     .fetch_one(&state.pool)
     .await?;
     Ok((StatusCode::CREATED, Json(row.into())))

@@ -69,6 +69,9 @@ enum TicketCommand {
         title: String,
         #[arg(long, default_value = "")]
         description: String,
+        /// Initial state (default todo)
+        #[arg(long)]
+        state: Option<String>,
     },
     /// List tickets in rank order
     List {
@@ -124,8 +127,8 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::new(cli.url, token);
     match cli.command {
         Command::Ticket { command } => match command {
-            TicketCommand::Create { title, description } => {
-                print(&client.create_ticket(&CreateTicket { title, description }).await?)
+            TicketCommand::Create { title, description, state } => {
+                print(&client.create_ticket(&CreateTicket { title, description, state }).await?)
             }
             TicketCommand::List { state, assignee } => {
                 for t in client.list_tickets(&ListTickets { state, assignee }).await? {

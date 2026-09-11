@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api } from "./api.js";
 import { Ctx, useApp, useBusy } from "./context.js";
+import { STATES } from "./format.js";
 import { Board } from "./Board.jsx";
 import { Detail } from "./Detail.jsx";
 import { Workers } from "./Workers.jsx";
@@ -94,11 +95,10 @@ function CreateDialog() {
   const submit = busy(async e => {
     e.preventDefault();
     const form = e.currentTarget, f = new FormData(form);
-    const t = await api("/tickets", { method: "POST", body: JSON.stringify({ title: f.get("title"), description: f.get("description") }) });
+    await api("/tickets", { method: "POST", body: JSON.stringify(Object.fromEntries(f)) });
     form.reset();
     dialog.current.close();
     await refresh();
-    select(t.id);
   });
   return (
     <>
@@ -108,7 +108,8 @@ function CreateDialog() {
         <form id="create" onSubmit={submit}>
           {error && <div class="error">{error}</div>}
           <input name="title" placeholder="Title" required />
-          <textarea name="description" placeholder="Description" rows={4} />
+          <select name="state">{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+          <textarea name="description" placeholder="Description" rows={16} />
           <button>Create ticket</button>
         </form>
       </dialog>

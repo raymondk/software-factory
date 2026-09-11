@@ -68,7 +68,7 @@ impl Fixture {
     }
 
     async fn ticket(&self, title: &str) -> i64 {
-        let t = self.human.create_ticket(&CreateTicket { title: title.into(), description: String::new() }).await.unwrap();
+        let t = self.human.create_ticket(&CreateTicket { title: title.into(), description: String::new(), state: None }).await.unwrap();
         self.human.update_ticket(t.id, &UpdateTicket { state: Some("ready".into()), ..Default::default() }).await.unwrap();
         t.id
     }

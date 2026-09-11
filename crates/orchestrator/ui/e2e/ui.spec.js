@@ -44,12 +44,11 @@ test("creates a ticket from the dialog", async ({ page }) => {
   await page.click("button:text-is('New ticket')");
   await expect(page.locator("#create")).toBeVisible();
   await page.fill("#create input[name=title]", "Created in browser");
+  await page.selectOption("#create select[name=state]", "ready");
   await page.click("#create button:text-is('Create ticket')");
   await expect(page.locator("#create")).toBeHidden();
-  await expect(page.locator(".column.todo .card", { hasText: "Created in browser" })).toBeVisible();
-  await expect(page).toHaveURL(/#\/tickets\/\d+$/);
-  await expect(page.locator("#detail")).toBeVisible();
-  await page.keyboard.press("Escape"); // closes the ticket that just opened
+  await expect(page.locator(".column.ready .card", { hasText: "Created in browser" })).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
   await page.click("button:text-is('New ticket')");
   await page.keyboard.press("Escape");
   await expect(page.locator("dialog[open]")).toHaveCount(0);
