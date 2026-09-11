@@ -216,8 +216,9 @@ async fn recovers_workers_after_restart() {
     let s = status(&url2).await;
     let listed = s["workers"].as_array().unwrap();
     assert!(listed.contains(&json!({ "worker_id": id, "container_id": cid, "status": "running" })), "{listed:?}");
-    let running = listed.iter().filter(|w| w["status"] == "running").count();
-    assert!(running >= 1 && s["in_use"] == running, "{s}");
+    // Other tests' containers may be mid-transition (created, removing); in_use counts everything not exited or dead.
+    let busy = listed.iter().filter(|w| !matches!(w["status"].as_str(), Some("exited" | "dead"))).count();
+    assert!(busy >= 1 && s["in_use"] == busy, "{s}");
 
     assert_eq!(stop(&url2, id).await, StatusCode::NO_CONTENT);
     assert!(docker(&["inspect", cid]).is_none(), "container still exists");
