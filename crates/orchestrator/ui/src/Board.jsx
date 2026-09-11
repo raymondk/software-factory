@@ -38,7 +38,7 @@ export function Board({ tickets, selected }) {
       <div>#{t.id} {t.title}</div>
       <div class="meta">
         {t.assignee && <span>{t.assignee}</span>}
-        {t.links.filter(isHttp).map(href => <a key={href} href={href} target="_blank" rel="noopener" title={href} onClick={e => e.stopPropagation()}>🔗</a>)}
+        {t.links.filter(isHttp).map(href => <a key={href} href={href} target="_blank" rel="noopener" title={href} onClick={e => e.stopPropagation()}>↗</a>)}
         {t.unresolved_comments ? <span class="badge" title="unresolved comments">{t.unresolved_comments}</span> : null}
       </div>
     </div>
@@ -51,7 +51,7 @@ export function Board({ tickets, selected }) {
                onDragOver={e => { e.preventDefault(); setOver(o => o?.column === s ? o : { column: s }); }}
                onDragLeave={e => e.currentTarget.contains(e.relatedTarget) || setOver(null)}
                onDrop={e => { const last = cards.filter(t => t.id !== drag?.ticket.id).at(-1); drop(e, s, last && { after: last.id }); }}>
-        <h3>{s} ({cards.length})</h3>
+        <h3>{s.replace("_", " ")} ({cards.length})</h3>
         {cards.map((t, i) => card(t, cards[i - 1], cards[i + 1]))}
       </section>
     );
