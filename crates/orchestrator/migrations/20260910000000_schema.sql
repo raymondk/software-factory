@@ -48,3 +48,22 @@ CREATE TABLE ticket_relations (
     UNIQUE (from_id, type, to_id)
 );
 CREATE INDEX ticket_relations_to ON ticket_relations(to_id);
+
+CREATE TABLE runs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id  INTEGER NOT NULL REFERENCES tickets(id),
+    worker_id  TEXT NOT NULL REFERENCES workers(id),
+    started_at TEXT NOT NULL,
+    ended_at   TEXT
+);
+CREATE INDEX runs_ticket ON runs(ticket_id, id);
+
+CREATE TABLE log_lines (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    worker_id  TEXT NOT NULL REFERENCES workers(id),
+    run_id     INTEGER REFERENCES runs(id),
+    line       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX log_lines_worker ON log_lines(worker_id, id);
+CREATE INDEX log_lines_run ON log_lines(run_id, id);

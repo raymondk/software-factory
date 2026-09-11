@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, patch } from "./api.js";
 import { useApp, useBusy } from "./context.js";
 import { ACTIONS, STATES, ago, isHttp, markdown, usageLine } from "./format.js";
+import { LogPane } from "./Log.jsx";
 
 const FIELDS = ["title", "state", "description", "links"];
 const same = (a, b) => FIELDS.every(k => a[k] === b[k]);
 
 // Detail pane for one ticket (remounted per ticket via key). The form follows the server while untouched;
 // once edited it keeps the user's text and offers a reload when the server version changes.
-export function Detail({ ticket: t, usage }) {
+export function Detail({ ticket: t, usage, run }) {
   const { refresh, select } = useApp();
   const busy = useBusy();
   const server = useMemo(() => ({ title: t.title, state: t.state, description: t.description, links: t.links.join("\n") }),
@@ -52,6 +53,7 @@ export function Detail({ ticket: t, usage }) {
         <div class="row"><span class="saved" hidden={!saved}>Saved</span><button class="primary">Save</button></div>
       </form>
       <Relations ticket={t} />
+      <Runs ticket={t} run={run} />
       </div>
       <div class="comments">
         <h3>Comments</h3>
@@ -103,6 +105,23 @@ function Relations({ ticket: t }) {
         <input name="ticket" type="number" min="1" placeholder="Ticket #" required value={other} onInput={e => setOther(e.currentTarget.value)} />
         <button>Add</button>
       </form>
+    </section>
+  );
+}
+
+// Runs newest first; the one in the URL shows its log, following live while the run is open.
+function Runs({ ticket: t, run }) {
+  const open = t.runs.find(r => r.id === run);
+  return (
+    <section id="runs" hidden={t.runs.length === 0}>
+      <h3>Runs</h3>
+      {t.runs.map(r => (
+        <div key={r.id} class={"run" + (r.id === run ? " selected" : "")}>
+          <a href={`#/tickets/${t.id}/runs/${r.id}`}>run {r.id}</a><span>{r.worker_id}</span>
+          <span title={r.started_at}>{ago(r.started_at)}</span><span class="tag">{r.ended_at ? "ended" : "running"}</span>
+        </div>
+      ))}
+      {open && <LogPane path={`/runs/${open.id}/logs`} live={!open.ended_at} />}
     </section>
   );
 }

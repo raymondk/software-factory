@@ -121,6 +121,35 @@ test("relates tickets and marks the blocked one", async ({ page, server }) => {
   await expect(card(page, t.id).locator(".blocked")).toHaveCount(0);
 });
 
+test("shows a run's log live and a worker's whole log", async ({ page, server }) => {
+  await server.api("/tickets", { method: "POST", body: { title: "Logged", state: "ready" } });
+  const w = await server.api("/workers", { method: "POST", body: { worker_type: "default" } });
+  const asWorker = async (p, body) => {
+    const r = await fetch(server.url + p, { method: "POST", headers: { Authorization: "Bearer " + w.token, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return r.status === 204 ? null : r.json();
+  };
+  await asWorker(`/workers/${w.id}/logs`, { run: null, lines: ["worker starting"] });
+  const job = await asWorker(`/workers/${w.id}/poll`, {}); // the lowest-ranked ready ticket, not necessarily `t`
+  const id = job.ticket.id;
+  await asWorker(`/workers/${w.id}/logs`, { run: job.run, lines: ["first line"] });
+  await page.goto(`/#/tickets/${id}`);
+  await page.click(`#runs a:text-is("run ${job.run}")`);
+  await expect(page).toHaveURL(new RegExp(`#/tickets/${id}/runs/${job.run}$`));
+  const log = page.locator("#detail .log");
+  await expect(log).toContainText("first line");
+  await asWorker(`/workers/${w.id}/logs`, { run: job.run, lines: ["second line"] });
+  await expect(log).toContainText("second line");
+  await expect(log).not.toContainText("worker starting");
+  await page.goto("/");
+  await page.click(`#workers tr:has-text("${w.id}") a:text-is("Log")`);
+  await expect(page).toHaveURL(new RegExp(`#/workers/${w.id}$`));
+  await expect(page.locator("#worker-log .log")).toContainText("worker starting");
+  await expect(page.locator("#worker-log .log")).toContainText("second line");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#worker-log")).toBeHidden();
+  await expect(page).toHaveURL(/\/#?$/);
+});
+
 test("reorders with Alt+ArrowDown and by dragging", async ({ page, server }) => {
   const a = await create(server, "First"), b = await create(server, "Second");
   await page.goto("/");

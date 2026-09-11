@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { api } from "./api.js";
 import { Ctx, useApp, useBusy } from "./context.js";
 import { STATES } from "./format.js";
@@ -6,9 +6,13 @@ import { Board } from "./Board.jsx";
 import { Detail } from "./Detail.jsx";
 import { Workers } from "./Workers.jsx";
 import { Metrics } from "./Metrics.jsx";
+import { LogPane } from "./Log.jsx";
 
-// The open ticket lives in the URL hash (#/tickets/<id>), so reload, back and forward all go through history.
-const idFromHash = () => { const m = /^#\/tickets\/(\d+)$/.exec(location.hash); return m ? Number(m[1]) : null; };
+// What is open lives in the URL hash, so reload, back and forward all go through history:
+// #/tickets/<id>, #/tickets/<id>/runs/<run> (that run's log), #/workers/<id> (the worker's log).
+const idFromHash = () => { const m = /^#\/tickets\/(\d+)(\/runs\/\d+)?$/.exec(location.hash); return m ? Number(m[1]) : null; };
+const runFromHash = () => { const m = /^#\/tickets\/\d+\/runs\/(\d+)$/.exec(location.hash); return m ? Number(m[1]) : null; };
+const workerFromHash = () => { const m = /^#\/workers\/([\w-]+)$/.exec(location.hash); return m ? m[1] : null; };
 const select = id => { location.hash = id == null ? "" : "#/tickets/" + id; };
 const clearHash = () => history.replaceState(null, "", location.pathname);
 
@@ -17,6 +21,8 @@ export function App() {
   const [workers, setWorkers] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [selected, setSelected] = useState(idFromHash);
+  const [run, setRun] = useState(runFromHash);
+  const [workerLog, setWorkerLog] = useState(workerFromHash);
   const [ticket, setTicket] = useState(null); // the open ticket, in full
   const [error, setError] = useState(null); // { message, fromPoll }
   const selectedRef = useRef(selected);
@@ -40,9 +46,9 @@ export function App() {
 
   useEffect(() => {
     const route = () => {
-      const id = idFromHash();
-      if (id == null && location.hash) { showError(`Ticket ${location.hash.split("/").pop()} not found`); clearHash(); }
-      setSelected(id);
+      const id = idFromHash(), worker = workerFromHash();
+      if (id == null && worker == null && location.hash) { showError(`Ticket ${location.hash.split("/").pop()} not found`); clearHash(); }
+      setSelected(id); setRun(runFromHash()); setWorkerLog(worker);
     };
     route();
     addEventListener("hashchange", route);
@@ -59,14 +65,33 @@ export function App() {
     return () => { clearInterval(i); document.removeEventListener("visibilitychange", tick); };
   }, [refresh]);
 
-  // The detail dialog follows the open ticket: shown while one is loaded, closed when the hash clears.
-  // Escape and a backdrop click close it natively; the close event then clears the hash.
-  const dialog = useRef();
-  useEffect(() => {
+  // The detail dialog follows the open ticket: shown while one is loaded, closed when the hash clears. Escape and a
+  // backdrop click close it natively; that close event clears the selection. The close event is asynchronous, so the
+  // one from our own close() is flagged and ignored: by the time it fires the hash may already point at a ticket again.
+  const dialog = useRef(), closing = useRef(false);
+  useLayoutEffect(() => {
     const d = dialog.current;
     if (ticket && !d.open) d.showModal();
-    if (!ticket && d.open) d.close();
+    if (!ticket && d.open) { closing.current = true; d.close(); }
   }, [ticket]);
+  // A user dismissal drops the selection at once, so a refresh already in flight cannot reopen the dialog.
+  const dismissed = () => {
+    if (closing.current) { closing.current = false; return; }
+    selectedRef.current = null; setTicket(null); select(null);
+  };
+
+  // The worker-log dialog follows the hash the same way.
+  const workerDialog = useRef(), closingWorker = useRef(false);
+  useLayoutEffect(() => {
+    const d = workerDialog.current;
+    if (workerLog && !d.open) d.showModal();
+    if (!workerLog && d.open) { closingWorker.current = true; d.close(); }
+  }, [workerLog]);
+  const workerDismissed = () => {
+    if (closingWorker.current) { closingWorker.current = false; return; }
+    setWorkerLog(null); select(null);
+  };
+  const loggedWorker = workerLog && (workers.find(w => w.id === workerLog) ?? { id: workerLog, status: "?" });
 
   const usage = ticket && (metrics?.per_ticket.find(x => x.ticket_id === ticket.id) ?? { tokens_in: 0, tokens_out: 0, cost: 0 });
   return (
@@ -77,8 +102,14 @@ export function App() {
         <CreateDialog />
         <div id="board">{tickets ? <Board tickets={tickets} selected={selected} /> : <span id="loading">Loading…</span>}</div>
       </section>
-      <dialog id="detail" ref={dialog} onClose={() => location.hash && select(null)} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
-        {ticket && <Detail key={ticket.id} ticket={ticket} usage={usage} />}
+      <dialog id="detail" ref={dialog} onClose={dismissed} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
+        {ticket && <Detail key={ticket.id} ticket={ticket} usage={usage} run={run} />}
+      </dialog>
+      <dialog id="worker-log" ref={workerDialog} onClose={workerDismissed} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
+        {loggedWorker && <>
+          <h2><span>{loggedWorker.id} <span class="tag">{loggedWorker.status}</span></span><button onClick={() => select(null)}>Close</button></h2>
+          <LogPane path={`/workers/${loggedWorker.id}/logs`} live={loggedWorker.status !== "dead"} />
+        </>}
       </dialog>
       <Workers workers={workers} />
       <Metrics metrics={metrics} />

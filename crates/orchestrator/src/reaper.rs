@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use sqlx::{Connection, SqlitePool};
 
-/// Marks every worker silent for longer than `timeout` dead (a `starting` worker counts from its creation) and
-/// frees the tickets they hold, keeping their state. Returns the ids of the workers reaped.
+/// Marks every worker silent for longer than `timeout` dead (a `starting` worker counts from its creation), frees
+/// the tickets they hold, keeping their state, and ends their open runs. Returns the ids of the workers reaped.
 pub async fn reap(pool: &SqlitePool, timeout: Duration) -> sqlx::Result<Vec<String>> {
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
@@ -19,6 +19,13 @@ pub async fn reap(pool: &SqlitePool, timeout: Duration) -> sqlx::Result<Vec<Stri
         sqlx::query(
             "UPDATE tickets SET assignee = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
              WHERE assignee IN (SELECT value FROM json_each(?1))",
+        )
+        .bind(serde_json::to_string(&ids).unwrap())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE runs SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+             WHERE ended_at IS NULL AND worker_id IN (SELECT value FROM json_each(?1))",
         )
         .bind(serde_json::to_string(&ids).unwrap())
         .execute(&mut *tx)

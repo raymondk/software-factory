@@ -1,4 +1,6 @@
-use api_client::{Breakdown, Client, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, MoveTicket, ReportUsage, Totals, UpdateTicket};
+use std::time::Duration;
+
+use api_client::{Breakdown, Client, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, LogLine, MoveTicket, ReportUsage, Totals, UpdateTicket};
 use serde::Serialize;
 use clap::{Parser, Subcommand};
 
@@ -46,6 +48,13 @@ enum WorkerCommand {
     Heartbeat { id: String },
     /// Pick up the next available ticket for the worker's type (worker token)
     Poll { id: String },
+    /// Print a worker's whole log, including lines outside runs
+    Logs {
+        id: String,
+        /// Keep printing new lines while the worker is alive
+        #[arg(short, long)]
+        follow: bool,
+    },
     /// Report tokens and cost spent on a ticket (worker token)
     Usage {
         id: String,
@@ -124,6 +133,16 @@ enum TicketCommand {
         #[arg(long, value_name = "ID")]
         related_to: Option<i64>,
     },
+    /// Print the log of a ticket's latest run
+    Logs {
+        id: i64,
+        /// A specific run instead of the latest
+        #[arg(long, value_name = "N")]
+        run: Option<i64>,
+        /// Keep printing new lines until the run ends
+        #[arg(short, long)]
+        follow: bool,
+    },
     /// Add a comment to a ticket
     Comment {
         id: i64,
@@ -182,6 +201,15 @@ async fn main() -> anyhow::Result<()> {
                 }
                 print(&t)
             }
+            TicketCommand::Logs { id, run, follow } => {
+                let t = client.get_ticket(id).await?;
+                let run = match run {
+                    Some(run) => run,
+                    None => t.runs.first().map(|r| r.id).ok_or_else(|| anyhow::anyhow!("ticket #{id} has no runs"))?,
+                };
+                let live = async || Ok(client.get_ticket(id).await?.runs.iter().any(|r| r.id == run && r.ended_at.is_none()));
+                tail(async |after| client.run_logs(run, after).await, live, follow).await?
+            }
             TicketCommand::Comment { id, body } => print(&client.add_comment(id, &CreateComment { body }).await?),
             TicketCommand::Comments { id } => client.list_comments(id).await?.iter().for_each(print_comment),
             TicketCommand::Resolve { id, cid } => print(&client.resolve_comment(id, cid).await?),
@@ -200,6 +228,10 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             }
+            WorkerCommand::Logs { id, follow } => {
+                let live = async || Ok(client.list_workers().await?.iter().any(|w| w.id == id && w.status != "dead"));
+                tail(async |after| client.worker_logs(&id, after).await, live, follow).await?
+            }
             WorkerCommand::Register { id } => print(&client.register(&id).await?),
             WorkerCommand::Heartbeat { id } => print(&client.heartbeat(&id).await?),
             WorkerCommand::Poll { id } => print(&client.poll(&id, None).await?),
@@ -217,6 +249,31 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Prints all lines page by page, then, with `follow`, polls every second while `live` holds, plus once after.
+async fn tail(
+    fetch: impl AsyncFn(Option<i64>) -> Result<Vec<LogLine>, api_client::Error>,
+    live: impl AsyncFn() -> anyhow::Result<bool>,
+    follow: bool,
+) -> anyhow::Result<()> {
+    let mut after = None;
+    let mut alive = follow;
+    loop {
+        let lines = fetch(after).await?;
+        lines.iter().for_each(|l| println!("{}", l.line));
+        if let Some(l) = lines.last() {
+            after = Some(l.id);
+            if lines.len() >= 1000 {
+                continue;
+            }
+        }
+        if !alive {
+            return Ok(());
+        }
+        alive = live().await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 }
 
 fn print<T: Serialize>(t: &T) {

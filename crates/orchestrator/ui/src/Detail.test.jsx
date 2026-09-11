@@ -1,13 +1,14 @@
-import { fireEvent, render, screen } from "@testing-library/preact";
-import { expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/preact";
+import { afterEach, expect, test, vi } from "vitest";
 import { Ctx } from "./context.js";
 import { Detail } from "./Detail.jsx";
 
 const ticket = (over = {}) => ({ id: 1, title: "T", state: "todo", description: "", links: [], rank: 1, assignee: null,
-                                 created_at: "", updated_at: "", comments: [], relations: [], blocked: false, ...over });
+                                 created_at: "", updated_at: "", comments: [], relations: [], blocked: false, runs: [], ...over });
 const usage = { tokens_in: 0, tokens_out: 0, cost: 0 };
 const ctx = { refresh: vi.fn(), select: vi.fn(), showError: vi.fn() };
 const mount = t => render(<Ctx.Provider value={ctx}><Detail ticket={t} usage={usage} /></Ctx.Provider>);
+afterEach(cleanup);
 
 test("an untouched form follows the server", () => {
   const { rerender, container } = mount(ticket());
@@ -49,4 +50,18 @@ test("relations are grouped and a blocked ticket names its blockers", () => {
   expect([...container.querySelectorAll("#relations h4")].map(h => h.textContent)).toEqual(["Depends on", "Blocks", "Related to"]);
   expect([...container.querySelectorAll(".relation.blocking a")].map(a => a.textContent)).toEqual(["#2 dep"]);
   expect(container.querySelector(".relation a[href='#/tickets/5']").textContent).toBe("#5 kin");
+});
+
+test("runs are listed newest first and the selected one shows its log", () => {
+  const runs = [{ id: 2, worker_id: "w-2", started_at: new Date().toISOString(), ended_at: null },
+                { id: 1, worker_id: "w-1", started_at: new Date().toISOString(), ended_at: new Date().toISOString() }];
+  const { container } = render(<Ctx.Provider value={ctx}><Detail ticket={ticket({ runs })} usage={usage} run={1} /></Ctx.Provider>);
+  expect([...container.querySelectorAll("#runs .run a")].map(a => a.textContent)).toEqual(["run 2", "run 1"]);
+  expect([...container.querySelectorAll("#runs .run .tag")].map(a => a.textContent)).toEqual(["running", "ended"]);
+  const selected = [...container.querySelectorAll(".run")].filter(d => d.classList.contains("selected"));
+  expect(selected.map(d => d.querySelector("a").getAttribute("href"))).toEqual(["#/tickets/1/runs/1"]);
+  expect(container.querySelector(".log")).toBeTruthy();
+  cleanup(); // two mounted dialogs would both carry id="runs"
+  const empty = render(<Ctx.Provider value={ctx}><Detail ticket={ticket()} usage={usage} run={null} /></Ctx.Provider>).container;
+  expect(empty.querySelector("section#runs").hidden).toBe(true);
 });
