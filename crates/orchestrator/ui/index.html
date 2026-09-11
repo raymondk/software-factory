@@ -4,6 +4,9 @@
 <style>
   body { font: 14px system-ui, sans-serif; margin: 1.5rem; display: grid; grid-template-columns: 3fr minmax(16rem, 1fr); gap: 1.5rem; }
   h1 { grid-column: 1 / -1; margin: 0; font-size: 1.2rem; }
+  #error { grid-column: 1 / -1; display: flex; gap: .5rem; padding: .4rem .6rem; background: #f8d7da; color: #842029; border-radius: 4px; }
+  #error:empty { display: none; }
+  #error button { margin-left: auto; }
   table { border-collapse: collapse; width: 100%; }
   td, th { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #ddd; }
   form { display: grid; gap: .5rem; margin-bottom: 1rem; }
@@ -30,13 +33,14 @@
   .comment.resolved { color: #999; text-decoration: line-through; }
 </style>
 <h1>Software Factory</h1>
+<div id="error"></div>
 <section>
   <form id="create">
     <input name="title" placeholder="Title" required>
     <textarea name="description" placeholder="Description" rows="1"></textarea>
     <button>Create ticket</button>
   </form>
-  <div id="board"></div>
+  <div id="board"><span id="loading">Loading…</span></div>
 </section>
 <section id="detail"></section>
 <details id="workers-section" open>
@@ -62,6 +66,19 @@
     return r.json();
   });
   const el = (tag, text) => { const e = document.createElement(tag); if (text != null) e.textContent = text; return e; };
+  const error = document.getElementById("error");
+  const showError = (message, fromRefresh) => {
+    const close = el("button", "×");
+    close.onclick = () => error.replaceChildren();
+    error.replaceChildren(el("span", message), close);
+    error.classList.toggle("refresh", !!fromRefresh);
+  };
+  // Disables the clicked/submitting button while the handler runs; errors go to the bar.
+  const busy = fn => async e => {
+    const b = e.submitter ?? e.currentTarget;
+    b.disabled = true;
+    try { await fn(e); } catch (err) { showError(err.message); } finally { b.disabled = false; }
+  };
   const STATES = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
   const stateSelect = (select, value) => {
     for (const s of STATES) { const o = el("option", s); o.value = s; o.selected = s === value; select.append(o); }
@@ -95,7 +112,7 @@
     meta.append(moveButton("↑", prev && { before: prev.id }, t.id),
                 moveButton("↓", next && { after: next.id }, t.id));
     c.append(el("div", `#${t.id} ${t.title}`), meta);
-    c.onclick = () => show(t.id);
+    c.onclick = () => show(t.id).catch(e => showError(e.message));
     return c;
   }
 
@@ -105,7 +122,7 @@
     for (const w of await api("/workers")) {
       const tr = el("tr");
       for (const v of [w.id, w.worker_type, w.status, w.last_heartbeat ?? "", w.ticket ? "#" + w.ticket : ""]) tr.append(el("td", v));
-      if (w.ticket) { tr.dataset.ticket = w.ticket; tr.onclick = () => show(w.ticket); }
+      if (w.ticket) { tr.dataset.ticket = w.ticket; tr.onclick = () => show(w.ticket).catch(e => showError(e.message)); }
       tbody.append(tr);
     }
   }
@@ -127,11 +144,11 @@
   function moveButton(label, body, id) {
     const b = el("button", label);
     b.disabled = !body;
-    b.onclick = async e => {
+    b.onclick = busy(async e => {
       e.stopPropagation();
-      await api("/tickets/" + id + "/move", { method: "POST", body: JSON.stringify(body) }).catch(e => alert(e.message));
-      list();
-    };
+      await api("/tickets/" + id + "/move", { method: "POST", body: JSON.stringify(body) });
+      await list();
+    });
     return b;
   }
 
@@ -145,14 +162,14 @@
     const description = Object.assign(el("textarea"), { name: "description", value: t.description, rows: 6 });
     const links = Object.assign(el("textarea"), { name: "links", value: t.links.join("\n"), rows: 3, placeholder: "Links, one per line" });
     form.append(title, state, description, links, el("button", "Save"));
-    form.onsubmit = async e => {
+    form.onsubmit = busy(async e => {
       e.preventDefault();
       const body = { title: title.value, state: state.value, description: description.value,
                      links: links.value.split("\n").map(l => l.trim()).filter(Boolean) };
-      await api("/tickets/" + t.id, { method: "PATCH", body: JSON.stringify(body) }).catch(e => alert(e.message));
+      await api("/tickets/" + t.id, { method: "PATCH", body: JSON.stringify(body) });
       await list();
-      show(t.id);
-    };
+      await show(t.id);
+    });
     const thread = el("section");
     for (const c of t.comments) {
       const div = el("div");
@@ -160,11 +177,11 @@
       const meta = el("small", `${c.author} · ${c.created_at} `);
       if (!c.resolved) {
         const resolve = el("button", "Resolve");
-        resolve.onclick = async () => {
-          await api(`/tickets/${t.id}/comments/${c.id}/resolve`, { method: "POST" }).catch(e => alert(e.message));
+        resolve.onclick = busy(async () => {
+          await api(`/tickets/${t.id}/comments/${c.id}/resolve`, { method: "POST" });
           await list();
-          show(t.id);
-        };
+          await show(t.id);
+        });
         meta.append(resolve);
       }
       div.append(meta, el("pre", c.body));
@@ -173,12 +190,12 @@
     const commentForm = el("form");
     const body = Object.assign(el("textarea"), { name: "body", rows: 3, placeholder: "Comment", required: true });
     commentForm.append(body, el("button", "Comment"));
-    commentForm.onsubmit = async e => {
+    commentForm.onsubmit = busy(async e => {
       e.preventDefault();
-      await api("/tickets/" + t.id + "/comments", { method: "POST", body: JSON.stringify({ body: body.value }) }).catch(e => alert(e.message));
+      await api("/tickets/" + t.id + "/comments", { method: "POST", body: JSON.stringify({ body: body.value }) });
       await list();
-      show(t.id);
-    };
+      await show(t.id);
+    });
     d.replaceChildren(
       el("h2", "#" + t.id + " " + t.title),
       el("p", `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`),
@@ -191,16 +208,18 @@
     );
   }
 
-  document.getElementById("create").onsubmit = async e => {
+  document.getElementById("create").onsubmit = busy(async e => {
     e.preventDefault();
     const f = new FormData(e.target);
     const t = await api("/tickets", { method: "POST", body: JSON.stringify({ title: f.get("title"), description: f.get("description") }) });
     e.target.reset();
     await list();
-    show(t.id);
-  };
+    await show(t.id);
+  });
 
   const refresh = () => Promise.all([listWorkers(), listMetrics()]);
-  list().then(refresh).catch(e => alert(e.message));
-  setInterval(() => refresh().catch(() => {}), 5000);
+  list().then(refresh).catch(e => showError(e.message)).finally(() => document.getElementById("loading")?.remove());
+  // A refresh error is shown once (replaced, not stacked) and cleared by the next successful refresh.
+  setInterval(() => refresh().then(() => error.classList.contains("refresh") && error.replaceChildren(),
+                                   e => showError(e.message, true)), 5000);
 </script>
