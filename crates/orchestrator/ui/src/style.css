@@ -76,7 +76,8 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 #workers tr[data-ticket] { cursor: pointer; }
 #workers tr[data-ticket]:hover { background: var(--icp-bg-sunk); }
 
-.comment { border-top: 1px solid var(--icp-rule); border-left: 3px solid var(--icp-rule); padding: .5rem 0 .5rem .6rem; }
+.comment { border-top: 1px solid var(--icp-rule); border-left: 3px solid var(--icp-rule); padding: .75rem 0 .75rem .75rem; margin-bottom: .75rem; }
+.comments > form { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--icp-rule); }
 .comment.human { border-left-color: var(--icp-accent); }
 .comment small { color: var(--icp-fg-muted); font-family: var(--mono); font-size: 11px; }
 .comment .tag { padding: 0 .3em; letter-spacing: 0.1em; font-size: 10px; }
