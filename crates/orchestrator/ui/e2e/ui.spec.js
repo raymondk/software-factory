@@ -78,6 +78,7 @@ test("edits title and state from the form and the Mark ready action", async ({ p
   await page.fill("#detail input[name=title]", "Edited");
   await page.selectOption("#detail select[name=state]", "in_review");
   await page.click("#detail button:text-is('Save')");
+  await expect(page.locator("#detail .saved")).toHaveText("Saved");
   await expect(page.locator(".column.in_review .card", { hasText: "Edited" })).toBeVisible();
   await page.click("#actions button:text-is('Back to todo')");
   await expect(page.locator(".column.todo .card", { hasText: "Edited" })).toBeVisible();

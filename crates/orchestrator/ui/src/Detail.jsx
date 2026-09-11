@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api, patch } from "./api.js";
 import { useApp, useBusy } from "./context.js";
 import { ACTIONS, STATES, ago, isHttp, markdown, usageLine } from "./format.js";
@@ -19,10 +19,17 @@ export function Detail({ ticket: t, usage }) {
   useEffect(() => { if (same(values, loaded) || same(values, server)) fill(server); }, [server, values]);
   const set = e => setValues({ ...values, [e.currentTarget.name]: e.currentTarget.value });
 
+  // "Saved" shows next to the button for a moment after a successful save.
+  const [saved, setSaved] = useState(false);
+  const savedTimer = useRef();
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
   const save = busy(async e => {
     e.preventDefault();
     await patch(t.id, { ...values, links: values.links.split("\n").map(l => l.trim()).filter(Boolean) });
     await refresh();
+    setSaved(true);
+    clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(false), 2000);
   });
   const action = state => busy(async () => { await patch(t.id, { state }); await refresh(); });
 
@@ -41,7 +48,7 @@ export function Detail({ ticket: t, usage }) {
         <select name="state" value={values.state} onChange={set}>{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
         <textarea name="description" rows={10} value={values.description} onInput={set} />
         <textarea name="links" rows={3} placeholder="Links, one per line" value={values.links} onInput={set} />
-        <button>Save</button>
+        <div class="row"><button class="primary">Save</button><span class="saved" hidden={!saved}>Saved</span></div>
       </form>
       </div>
       <div class="comments">

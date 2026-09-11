@@ -33,6 +33,9 @@ table { border-collapse: collapse; width: 100%; }
 td, th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--icp-rule); }
 #metrics td:not(:first-child), #workers td:first-child, #workers td:nth-child(4), #totals { font: 13px var(--mono); }
 form { display: grid; gap: .5rem; margin-bottom: 1rem; }
+.row { display: flex; gap: .75rem; align-items: center; }
+.row > button { flex: 1; }
+.saved { color: var(--icp-fg-secondary); font-size: 13px; }
 #toolbar { margin-bottom: 1rem; }
 dialog { width: 92vw; max-width: 90rem; height: 90vh; padding: 0; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); }
 dialog > *, .pane { padding: 1.25rem 1.5rem; }
