@@ -23,6 +23,10 @@
   .meta button { padding: 0 .3rem; margin-left: auto; }
   .meta button + button { margin-left: 0; }
   .badge { background: #d9534f; color: #fff; border-radius: 1em; padding: 0 .5em; }
+  .meta a { text-decoration: none; }
+  #links { display: grid; gap: .2rem; overflow-wrap: anywhere; }
+  #actions { display: flex; gap: .5rem; margin-bottom: 1rem; }
+  #links:empty, #actions:empty { display: none; }
   #detail:empty::before { content: "Select a ticket."; color: #888; }
   #workers-section, #metrics-section { grid-column: 1 / -1; }
   summary { cursor: pointer; font-weight: bold; margin-bottom: .5rem; }
@@ -114,6 +118,11 @@
       return `<p>${inline(block)}</p>`;
     }).join("")).join("");
   const STATES = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
+  // One-click state moves shown in the detail pane per current state.
+  const ACTIONS = { todo: [["Mark ready", "ready"]], ready: [["Back to todo", "todo"]],
+                    in_review: [["Done", "done"], ["Back to todo", "todo"]], failed: [["Retry", "ready"]] };
+  const isHttp = href => /^https?:\/\//.test(href);
+  const anchor = (href, text) => Object.assign(el("a", text), { href, target: "_blank", rel: "noopener", title: href });
   const stateSelect = (select, value) => {
     for (const s of STATES) { const o = el("option", s); o.value = s; o.selected = s === value; select.append(o); }
     return select;
@@ -137,6 +146,7 @@
     const meta = el("div");
     meta.className = "meta";
     if (t.assignee) meta.append(el("span", t.assignee));
+    for (const href of t.links.filter(isHttp)) { const a = anchor(href, "🔗"); a.onclick = e => e.stopPropagation(); meta.append(a); }
     if (t.unresolved_comments) {
       const b = el("span", t.unresolved_comments);
       b.className = "badge";
@@ -202,6 +212,7 @@
   // Builds the detail pane once; update() refreshes the read-only parts in place and never touches text the user typed.
   function buildPane(id) {
     const header = el("h2"), meta = el("p"), dates = el("p"), usage = el("p"), thread = el("section");
+    const links = Object.assign(el("p"), { id: "links" }), actions = Object.assign(el("div"), { id: "actions" });
     const form = el("form");
     const notice = el("div", "Ticket changed on the server. ");
     notice.className = "notice";
@@ -234,12 +245,24 @@
       await list();
       await show(id);
     });
-    document.getElementById("detail").replaceChildren(header, meta, dates, usage, form, el("h3", "Comments"), thread, commentForm);
+    document.getElementById("detail").replaceChildren(header, meta, dates, usage, links, actions, form, el("h3", "Comments"), thread, commentForm);
+    const action = ([label, state]) => {
+      const b = el("button", label);
+      b.onclick = busy(async () => {
+        await api("/tickets/" + id, { method: "PATCH", body: JSON.stringify({ state }) });
+        await list();
+        await show(id);
+      });
+      return b;
+    };
+    let shownState;
     const update = (t, u) => {
       header.textContent = `#${t.id} ${t.title}`;
       meta.textContent = `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`;
       dates.textContent = `created: ${t.created_at} · updated: ${t.updated_at}`;
       usage.textContent = usageLine(u);
+      links.replaceChildren(...t.links.map(l => isHttp(l) ? anchor(l, l) : el("span", l)));
+      if (t.state !== shownState) { shownState = t.state; actions.replaceChildren(...(ACTIONS[t.state] ?? []).map(action)); }
       server = { title: t.title, state: t.state, description: t.description, links: t.links.join("\n") };
       if (!loaded || same(values(), loaded) || same(values(), server)) fill(server); // an untouched (or already matching) form follows the server silently
       notice.hidden = same(server, loaded);
