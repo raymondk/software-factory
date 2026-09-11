@@ -1,11 +1,11 @@
-const { test: base, expect } = require("@playwright/test");
-const { spawn } = require("node:child_process");
-const fs = require("node:fs");
-const net = require("node:net");
-const os = require("node:os");
-const path = require("node:path");
+import { test as base, expect } from "@playwright/test";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 
-const root = path.join(__dirname, "..");
+const root = path.join(import.meta.dirname, "..", "..");
 const TOKEN = "change-me";
 const freePort = () => new Promise(resolve => {
   const s = net.createServer().listen(0, () => { const { port } = s.address(); s.close(() => resolve(port)); });

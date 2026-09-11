@@ -38,6 +38,8 @@ its prompt, and the agent implements the change, opens a pull request, links it,
 A human reviews. If the worker dies mid-run, the ticket keeps its state and the next worker resumes it.
 
 
-## UI tests
+## UI
 
-Browser tests in `ui-tests/` start their own orchestrator. Once: `cd ui-tests && npm ci && npx playwright install chromium`; then `npm test`.
+The UI is a Vite + Preact project in `ui/`. `cargo build` embeds `ui/dist/index.html`, so build it first: `cd ui && npm ci && npm run build`.
+`npm run dev` serves it against an orchestrator on `localhost:8080` (set `VITE_TOKEN`). `npm test` runs unit tests; `npm run e2e` builds
+everything and runs the Playwright tests, which start their own orchestrator (once: `npx playwright install chromium`).

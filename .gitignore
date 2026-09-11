@@ -17,6 +17,7 @@
 *.db
 *.db-*
 
-# UI tests
-ui-tests/node_modules
-ui-tests/test-results
+# UI
+ui/node_modules
+ui/dist
+ui/test-results

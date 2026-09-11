@@ -13,7 +13,8 @@ use sqlx::{Connection, SqliteExecutor};
 use crate::config::Config;
 use crate::{AppState, STATES};
 
-const UI: &str = include_str!("../ui/index.html");
+/// Built by `npm run build` in `ui/`.
+const UI: &str = include_str!("../../../ui/dist/index.html");
 /// Neighbouring ranks closer than this trigger renormalization.
 const MIN_GAP: f64 = 1e-6;
 
@@ -82,7 +83,7 @@ async fn auth(State(state): State<AppState>, mut req: Request, next: Next) -> Re
 }
 
 async fn ui(State(state): State<AppState>) -> Html<String> {
-    let token = serde_json::to_string(&state.config.orchestrator.token).unwrap().replace("</", "<\\/");
+    let token = state.config.orchestrator.token.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
     Html(UI.replace("__TOKEN__", &token))
 }
 
