@@ -1,0 +1,10 @@
+{
+  "name": "ui-tests",
+  "private": true,
+  "scripts": {
+    "test": "cargo build -p orchestrator -p factory && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}

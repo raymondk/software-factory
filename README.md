@@ -37,3 +37,7 @@ Flow: a ticket moves to `ready`. The scheduler asks the provider for a worker. T
 its prompt, and the agent implements the change, opens a pull request, links it, and moves the ticket to `in_review`.
 A human reviews. If the worker dies mid-run, the ticket keeps its state and the next worker resumes it.
 
+
+## UI tests
+
+Browser tests in `ui-tests/` start their own orchestrator. Once: `cd ui-tests && npm ci && npx playwright install chromium`; then `npm test`.

@@ -31,7 +31,7 @@ pub fn router(state: AppState) -> Router {
         .route("/workers/{id}/usage", post(report_usage))
         .route("/metrics", get(metrics))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
-    Router::new().route("/", get(ui)).merge(api).with_state(state)
+    Router::new().route("/", get(ui)).route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT })).merge(api).with_state(state)
 }
 
 /// Who is making the request, as established by `auth`. Handlers read it via `Extension<Caller>`.
