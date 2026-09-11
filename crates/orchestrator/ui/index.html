@@ -21,7 +21,7 @@
   .meta button + button { margin-left: 0; }
   .badge { background: #d9534f; color: #fff; border-radius: 1em; padding: 0 .5em; }
   #detail:empty::before { content: "Select a ticket."; color: #888; }
-  #workers-section { grid-column: 1 / -1; }
+  #workers-section, #metrics-section { grid-column: 1 / -1; }
   summary { cursor: pointer; font-weight: bold; margin-bottom: .5rem; }
   #workers tr[data-ticket] { cursor: pointer; }
   #workers tr[data-ticket]:hover { background: #f4f4f4; }
@@ -44,6 +44,14 @@
   <table>
     <thead><tr><th>Id</th><th>Type</th><th>Status</th><th>Last heartbeat</th><th>Ticket</th></tr></thead>
     <tbody id="workers"></tbody>
+  </table>
+</details>
+<details id="metrics-section" open>
+  <summary>Metrics</summary>
+  <p id="totals"></p>
+  <table>
+    <thead><tr><th>Type</th><th>Tokens in</th><th>Tokens out</th><th>Cost</th><th>Completed</th><th>Failed</th></tr></thead>
+    <tbody id="metrics"></tbody>
   </table>
 </details>
 <script>
@@ -102,6 +110,20 @@
     }
   }
 
+  const usageLine = u => `tokens in: ${u.tokens_in} · tokens out: ${u.tokens_out} · cost: $${u.cost.toFixed(2)}`;
+
+  async function listMetrics() {
+    const m = await api("/metrics");
+    document.getElementById("totals").textContent =
+      `${usageLine(m.totals)} · completed: ${m.totals.tickets_completed} · failed: ${m.totals.tickets_failed}`;
+    document.getElementById("metrics").replaceChildren(...m.per_worker_type.map(w => {
+      const tr = el("tr");
+      for (const v of [w.worker_type, w.tokens_in, w.tokens_out, "$" + w.cost.toFixed(2), w.tickets_completed, w.tickets_failed]) tr.append(el("td", v));
+      return tr;
+    }));
+    return m;
+  }
+
   function moveButton(label, body, id) {
     const b = el("button", label);
     b.disabled = !body;
@@ -114,7 +136,7 @@
   }
 
   async function show(id) {
-    const [t, m] = await Promise.all([api("/tickets/" + id), api("/metrics")]);
+    const [t, m] = await Promise.all([api("/tickets/" + id), listMetrics()]);
     const u = m.per_ticket.find(x => x.ticket_id === id) ?? { tokens_in: 0, tokens_out: 0, cost: 0 };
     const d = document.getElementById("detail");
     const form = el("form");
@@ -161,7 +183,7 @@
       el("h2", "#" + t.id + " " + t.title),
       el("p", `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`),
       el("p", `created: ${t.created_at} · updated: ${t.updated_at}`),
-      el("p", `tokens in: ${u.tokens_in} · tokens out: ${u.tokens_out} · cost: $${u.cost.toFixed(2)}`),
+      el("p", usageLine(u)),
       form,
       el("h3", "Comments"),
       thread,
@@ -178,6 +200,7 @@
     show(t.id);
   };
 
-  list().then(listWorkers).catch(e => alert(e.message));
-  setInterval(() => listWorkers().catch(() => {}), 5000);
+  const refresh = () => Promise.all([listWorkers(), listMetrics()]);
+  list().then(refresh).catch(e => alert(e.message));
+  setInterval(() => refresh().catch(() => {}), 5000);
 </script>
