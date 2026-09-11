@@ -19,6 +19,7 @@
   .column.failed h3 { background: #f8d7da; color: #842029; }
   .card { border: 1px solid #ddd; border-radius: 4px; padding: .4rem .5rem; margin-bottom: .5rem; cursor: pointer; overflow-wrap: anywhere; }
   .card:hover { background: #f4f4f4; }
+  .card.selected { border-color: #5b9bd5; background: #eef4fb; }
   .meta { display: flex; gap: .4rem; align-items: center; margin-top: .3rem; color: #666; font-size: .85em; }
   .meta button { padding: 0 .3rem; margin-left: auto; }
   .meta button + button { margin-left: 0; }
@@ -28,6 +29,8 @@
   #actions { display: flex; gap: .5rem; margin-bottom: 1rem; }
   #links:empty, #actions:empty { display: none; }
   #detail:empty::before { content: "Select a ticket."; color: #888; }
+  #detail h2 { display: flex; gap: .5rem; align-items: center; }
+  #detail h2 button { margin-left: auto; }
   #workers-section, #metrics-section { grid-column: 1 / -1; }
   summary { cursor: pointer; font-weight: bold; margin-bottom: .5rem; }
   #workers tr[data-ticket] { cursor: pointer; }
@@ -138,11 +141,14 @@
       cards.forEach((t, i) => col.append(card(t, cards[i - 1], cards[i + 1])));
       return col;
     }));
+    highlight();
   }
+  const highlight = () => { for (const c of document.querySelectorAll(".card")) c.classList.toggle("selected", Number(c.dataset.id) === selected); };
 
   function card(t, prev, next) {
     const c = el("div");
     c.className = "card";
+    c.dataset.id = t.id;
     const meta = el("div");
     meta.className = "meta";
     if (t.assignee) meta.append(el("span", t.assignee));
@@ -156,7 +162,7 @@
     meta.append(moveButton("↑", prev && { before: prev.id }, t.id),
                 moveButton("↓", next && { after: next.id }, t.id));
     c.append(el("div", `#${t.id} ${t.title}`), meta);
-    c.onclick = () => show(t.id).catch(e => showError(e.message));
+    c.onclick = () => select(t.id === selected ? null : t.id);
     return c;
   }
 
@@ -166,7 +172,7 @@
     for (const w of await api("/workers")) {
       const tr = el("tr");
       for (const v of [w.id, w.worker_type, w.status, w.last_heartbeat ?? "", w.ticket ? "#" + w.ticket : ""]) tr.append(el("td", v));
-      if (w.ticket) { tr.dataset.ticket = w.ticket; tr.onclick = () => show(w.ticket).catch(e => showError(e.message)); }
+      if (w.ticket) { tr.dataset.ticket = w.ticket; tr.onclick = () => select(w.ticket); }
       tbody.append(tr);
     }
   }
@@ -197,6 +203,22 @@
   }
 
   let selected = null, pane = null; // the open ticket id and its pane (rebuilt only when another ticket is opened)
+  const detail = document.getElementById("detail");
+
+  // The open ticket lives in the URL hash (#/tickets/<id>), so reload, back and forward all go through history.
+  const select = id => { location.hash = id == null ? "" : "#/tickets/" + id; };
+  async function route() {
+    const id = /^#\/tickets\/(\d+)$/.exec(location.hash)?.[1];
+    if (id) {
+      try { await show(Number(id)); highlight(); return; } catch (e) { if (e.message !== "not found") throw e; }
+    }
+    if (location.hash) { showError(`Ticket ${location.hash.split("/").pop()} not found`); history.replaceState(null, "", location.pathname); }
+    selected = pane = null;
+    detail.replaceChildren();
+    highlight();
+    await listMetrics();
+  }
+  addEventListener("hashchange", () => route().catch(e => showError(e.message)));
 
   async function show(id) {
     selected = id;
@@ -211,9 +233,11 @@
 
   // Builds the detail pane once; update() refreshes the read-only parts in place and never touches text the user typed.
   function buildPane(id) {
-    const header = el("h2"), meta = el("p"), dates = el("p"), usage = el("p"), thread = el("section");
+    const title = el("span"), header = el("h2"), meta = el("p"), dates = el("p"), usage = el("p"), thread = el("section");
     const links = Object.assign(el("p"), { id: "links" }), actions = Object.assign(el("div"), { id: "actions" });
-    const form = el("form");
+    const form = el("form"), close = el("button", "Close");
+    close.onclick = () => select(null);
+    header.append(title, close);
     const notice = el("div", "Ticket changed on the server. ");
     notice.className = "notice";
     const reload = Object.assign(el("button", "Reload"), { type: "button" });
@@ -245,7 +269,7 @@
       await list();
       await show(id);
     });
-    document.getElementById("detail").replaceChildren(header, meta, dates, usage, links, actions, form, el("h3", "Comments"), thread, commentForm);
+    detail.replaceChildren(header, meta, dates, usage, links, actions, form, el("h3", "Comments"), thread, commentForm);
     const action = ([label, state]) => {
       const b = el("button", label);
       b.onclick = busy(async () => {
@@ -257,7 +281,7 @@
     };
     let shownState;
     const update = (t, u) => {
-      header.textContent = `#${t.id} ${t.title}`;
+      title.textContent = `#${t.id} ${t.title}`;
       meta.textContent = `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`;
       dates.textContent = `created: ${t.created_at} · updated: ${t.updated_at}`;
       usage.textContent = usageLine(u);
@@ -324,11 +348,11 @@
     const t = await api("/tickets", { method: "POST", body: JSON.stringify({ title: f.get("title"), description: f.get("description") }) });
     e.target.reset();
     await list();
-    await show(t.id);
+    select(t.id);
   });
 
   const refresh = () => Promise.all([list(), listWorkers(), selected == null ? listMetrics() : show(selected)]);
-  refresh().catch(e => showError(e.message)).finally(() => document.getElementById("loading")?.remove());
+  Promise.all([list(), listWorkers(), route()]).catch(e => showError(e.message)).finally(() => document.getElementById("loading")?.remove());
   // Polls while the tab is visible and refreshes as soon as it becomes visible again.
   // A refresh error is shown once (replaced, not stacked) and cleared by the next successful refresh.
   const tick = () => document.hidden || refresh().then(() => error.classList.contains("refresh") && error.replaceChildren(),
