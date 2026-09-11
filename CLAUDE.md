@@ -7,6 +7,7 @@ Status: design in `SPEC.md`, broken into GitHub issues. Implementation in progre
 - Write as little as possible. Do not add docs, structure, or conventions that were not asked for.
 - Use `gh-axi` for GitHub operations.
 - Commit and push only when asked.
+- UI changes follow the ICP brand guidelines at https://jgwns-tqaaa-aaaao-ba5ua-cai.icp0.io/ (tokens in `crates/orchestrator/ui/src/style.css`).
 
 ## Agent skills
 

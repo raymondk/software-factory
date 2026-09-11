@@ -29,6 +29,7 @@ export function Detail({ ticket: t, usage }) {
   return (
     <div class="pane">
       <h2><span>#{t.id} {t.title}</span><button onClick={() => select(null)}>Close</button></h2>
+      <div>
       <p>rank: {t.rank} · assignee: {t.assignee ?? "none"}</p>
       <p>created: {t.created_at} · updated: {t.updated_at}</p>
       <p>{usageLine(usage)}</p>
@@ -38,13 +39,16 @@ export function Detail({ ticket: t, usage }) {
         <div class="notice" hidden={same(server, loaded)}>Ticket changed on the server. <button type="button" onClick={() => fill(server)}>Reload</button></div>
         <input name="title" required value={values.title} onInput={set} />
         <select name="state" value={values.state} onChange={set}>{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
-        <textarea name="description" rows={6} value={values.description} onInput={set} />
+        <textarea name="description" rows={10} value={values.description} onInput={set} />
         <textarea name="links" rows={3} placeholder="Links, one per line" value={values.links} onInput={set} />
         <button>Save</button>
       </form>
-      <h3>Comments</h3>
-      <Thread ticket={t} />
-      <CommentForm ticket={t} />
+      </div>
+      <div class="comments">
+        <h3>Comments</h3>
+        <Thread ticket={t} />
+        <CommentForm ticket={t} />
+      </div>
     </div>
   );
 }
