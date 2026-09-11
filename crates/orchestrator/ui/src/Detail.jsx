@@ -48,7 +48,7 @@ export function Detail({ ticket: t, usage }) {
         <select name="state" value={values.state} onChange={set}>{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
         <textarea name="description" rows={10} value={values.description} onInput={set} />
         <textarea name="links" rows={3} placeholder="Links, one per line" value={values.links} onInput={set} />
-        <div class="row"><button class="primary">Save</button><span class="saved" hidden={!saved}>Saved</span></div>
+        <div class="row"><span class="saved" hidden={!saved}>Saved</span><button class="primary">Save</button></div>
       </form>
       </div>
       <div class="comments">
@@ -73,7 +73,7 @@ function CommentForm({ ticket: t }) {
   return (
     <form onSubmit={submit}>
       <textarea name="body" rows={3} placeholder="Comment" required value={body} onInput={e => setBody(e.currentTarget.value)} />
-      <button>Comment</button>
+      <div class="row"><button class="primary">Comment</button></div>
     </form>
   );
 }
