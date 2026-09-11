@@ -97,6 +97,8 @@ struct Row {
     created_at: String,
     updated_at: String,
     links: String,
+    #[sqlx(default)]
+    unresolved_comments: i64,
 }
 
 impl From<Row> for Ticket {
@@ -112,6 +114,7 @@ impl From<Row> for Ticket {
             updated_at: r.updated_at,
             links: serde_json::from_str(&r.links).unwrap_or_default(),
             comments: vec![],
+            unresolved_comments: r.unresolved_comments,
         }
     }
 }
@@ -133,6 +136,8 @@ impl From<CommentRow> for Comment {
 }
 
 const COLUMNS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links";
+const COLUMNS_WITH_COMMENTS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links, \
+    (SELECT COUNT(*) FROM comments c WHERE c.ticket_id = tickets.id AND NOT c.resolved) AS unresolved_comments";
 const COMMENT_COLUMNS: &str = "id, ticket_id, author, body, created_at, resolved";
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
@@ -155,7 +160,7 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
 // The list leaves `comments` empty; only GET /tickets/{id} embeds the thread, to avoid a query per ticket.
 async fn list_tickets(State(state): State<AppState>, Query(filter): Query<ListTickets>) -> Result<Json<Vec<Ticket>>, ApiError> {
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {COLUMNS} FROM tickets WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR assignee = ?2) \
+        "SELECT {COLUMNS_WITH_COMMENTS} FROM tickets WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR assignee = ?2) \
          ORDER BY rank ASC, id ASC"
     ))
     .bind(&filter.state)
@@ -166,7 +171,7 @@ async fn list_tickets(State(state): State<AppState>, Query(filter): Query<ListTi
 }
 
 async fn get_ticket(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<Ticket>, ApiError> {
-    let row: Option<Row> = sqlx::query_as(&format!("SELECT {COLUMNS} FROM tickets WHERE id = ?1"))
+    let row: Option<Row> = sqlx::query_as(&format!("SELECT {COLUMNS_WITH_COMMENTS} FROM tickets WHERE id = ?1"))
         .bind(id)
         .fetch_optional(&state.pool)
         .await?;

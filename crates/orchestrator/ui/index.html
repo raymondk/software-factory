@@ -2,20 +2,29 @@
 <meta charset="utf-8">
 <title>Software Factory</title>
 <style>
-  body { font: 14px system-ui, sans-serif; margin: 1.5rem; display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+  body { font: 14px system-ui, sans-serif; margin: 1.5rem; display: grid; grid-template-columns: 3fr minmax(16rem, 1fr); gap: 1.5rem; }
   h1 { grid-column: 1 / -1; margin: 0; font-size: 1.2rem; }
   table { border-collapse: collapse; width: 100%; }
   td, th { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid #ddd; }
-  tbody tr { cursor: pointer; }
-  tbody tr:hover { background: #f4f4f4; }
-  tbody td:first-child { white-space: nowrap; padding: 0; }
   form { display: grid; gap: .5rem; margin-bottom: 1rem; }
+  #create { display: flex; align-items: start; }
+  #create input { flex: 1; }
   input, textarea, select { font: inherit; padding: .3rem; }
-  #filter { margin-bottom: .5rem; }
   pre { white-space: pre-wrap; }
+  #board { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .5rem; }
+  .column h3 { margin: 0 0 .5rem; padding: .3rem .5rem; font-size: .9rem; background: #eee; border-radius: 4px; }
+  .column.failed h3 { background: #f8d7da; color: #842029; }
+  .card { border: 1px solid #ddd; border-radius: 4px; padding: .4rem .5rem; margin-bottom: .5rem; cursor: pointer; overflow-wrap: anywhere; }
+  .card:hover { background: #f4f4f4; }
+  .meta { display: flex; gap: .4rem; align-items: center; margin-top: .3rem; color: #666; font-size: .85em; }
+  .meta button { padding: 0 .3rem; margin-left: auto; }
+  .meta button + button { margin-left: 0; }
+  .badge { background: #d9534f; color: #fff; border-radius: 1em; padding: 0 .5em; }
   #detail:empty::before { content: "Select a ticket."; color: #888; }
   #workers-section { grid-column: 1 / -1; }
-  #workers tr { cursor: default; }
+  summary { cursor: pointer; font-weight: bold; margin-bottom: .5rem; }
+  #workers tr[data-ticket] { cursor: pointer; }
+  #workers tr[data-ticket]:hover { background: #f4f4f4; }
   .comment { border-top: 1px solid #ddd; padding: .5rem 0; }
   .comment small { color: #888; }
   .comment.resolved { color: #999; text-decoration: line-through; }
@@ -24,23 +33,19 @@
 <section>
   <form id="create">
     <input name="title" placeholder="Title" required>
-    <textarea name="description" placeholder="Description" rows="3"></textarea>
+    <textarea name="description" placeholder="Description" rows="1"></textarea>
     <button>Create ticket</button>
   </form>
-  <label id="filter">State <select id="state-filter"><option value="">all</option></select></label>
-  <table>
-    <thead><tr><th></th><th>#</th><th>Title</th><th>State</th><th>Rank</th><th>Assignee</th></tr></thead>
-    <tbody id="tickets"></tbody>
-  </table>
+  <div id="board"></div>
 </section>
 <section id="detail"></section>
-<section id="workers-section">
-  <h3>Workers</h3>
+<details id="workers-section" open>
+  <summary>Workers</summary>
   <table>
     <thead><tr><th>Id</th><th>Type</th><th>Status</th><th>Last heartbeat</th><th>Ticket</th></tr></thead>
     <tbody id="workers"></tbody>
   </table>
-</section>
+</details>
 <script>
   const TOKEN = __TOKEN__;
   const headers = { Authorization: "Bearer " + TOKEN, "Content-Type": "application/json" };
@@ -56,20 +61,34 @@
   };
 
   async function list() {
-    const tbody = document.getElementById("tickets");
-    tbody.replaceChildren();
-    const state = document.getElementById("state-filter").value;
-    const tickets = await api("/tickets" + (state ? "?state=" + state : ""));
-    tickets.forEach((t, i) => {
-      const tr = el("tr");
-      const arrows = el("td");
-      arrows.append(moveButton("\u2191", tickets[i - 1] && { before: tickets[i - 1].id }, t.id),
-                    moveButton("\u2193", tickets[i + 1] && { after: tickets[i + 1].id }, t.id));
-      tr.append(arrows);
-      for (const v of [t.id, t.title, t.state, t.rank, t.assignee ?? ""]) tr.append(el("td", v));
-      tr.onclick = () => show(t.id);
-      tbody.append(tr);
-    });
+    const tickets = await api("/tickets");
+    document.getElementById("board").replaceChildren(...STATES.map(s => {
+      const col = el("section");
+      col.className = "column " + s;
+      const cards = tickets.filter(t => t.state === s);
+      col.append(el("h3", `${s} (${cards.length})`));
+      cards.forEach((t, i) => col.append(card(t, cards[i - 1], cards[i + 1])));
+      return col;
+    }));
+  }
+
+  function card(t, prev, next) {
+    const c = el("div");
+    c.className = "card";
+    const meta = el("div");
+    meta.className = "meta";
+    if (t.assignee) meta.append(el("span", t.assignee));
+    if (t.unresolved_comments) {
+      const b = el("span", t.unresolved_comments);
+      b.className = "badge";
+      b.title = "unresolved comments";
+      meta.append(b);
+    }
+    meta.append(moveButton("↑", prev && { before: prev.id }, t.id),
+                moveButton("↓", next && { after: next.id }, t.id));
+    c.append(el("div", `#${t.id} ${t.title}`), meta);
+    c.onclick = () => show(t.id);
+    return c;
   }
 
   async function listWorkers() {
@@ -78,7 +97,7 @@
     for (const w of await api("/workers")) {
       const tr = el("tr");
       for (const v of [w.id, w.worker_type, w.status, w.last_heartbeat ?? "", w.ticket ? "#" + w.ticket : ""]) tr.append(el("td", v));
-      if (w.ticket) { tr.style.cursor = "pointer"; tr.onclick = () => show(w.ticket); }
+      if (w.ticket) { tr.dataset.ticket = w.ticket; tr.onclick = () => show(w.ticket); }
       tbody.append(tr);
     }
   }
@@ -121,6 +140,7 @@
         const resolve = el("button", "Resolve");
         resolve.onclick = async () => {
           await api(`/tickets/${t.id}/comments/${c.id}/resolve`, { method: "POST" }).catch(e => alert(e.message));
+          await list();
           show(t.id);
         };
         meta.append(resolve);
@@ -134,6 +154,7 @@
     commentForm.onsubmit = async e => {
       e.preventDefault();
       await api("/tickets/" + t.id + "/comments", { method: "POST", body: JSON.stringify({ body: body.value }) }).catch(e => alert(e.message));
+      await list();
       show(t.id);
     };
     d.replaceChildren(
@@ -147,8 +168,6 @@
       commentForm,
     );
   }
-
-  stateSelect(document.getElementById("state-filter")).onchange = () => list().catch(e => alert(e.message));
 
   document.getElementById("create").onsubmit = async e => {
     e.preventDefault();

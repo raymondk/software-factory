@@ -14,6 +14,8 @@ pub struct Ticket {
     pub updated_at: String,
     pub links: Vec<String>,
     pub comments: Vec<Comment>,
+    #[serde(default)]
+    pub unresolved_comments: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
