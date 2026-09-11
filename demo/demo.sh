@@ -2,6 +2,7 @@
 # One ticket end to end through one worker. Usage: demo.sh "title" ["description"]
 # DEMO_AGENT=command runs a shell stand-in instead of Claude Code (no tokens needed);
 # DEMO_SLEEP (seconds, default 5) is how long the stand-in "works" before finishing.
+# DEMO_KILL=1 kills the worker container once the ticket is in_progress: the ticket keeps its state and a new worker resumes it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 title=${1:?usage: demo.sh "title" ["description"]}
@@ -19,7 +20,8 @@ export PATH=$PWD/target/release:$PATH
 tmp=$(mktemp -d)
 echo "Configs and logs in $tmp"
 if [ "$agent" = command ]; then
-  sleep=${DEMO_SLEEP:-5}
+  sleep=${DEMO_SLEEP:-${DEMO_KILL:+30}}
+  sleep=${sleep:-5}
   sed -e 's/^heartbeat_timeout = .*/heartbeat_timeout = "10s"/' -e '/^\[worker_types/,$d' demo/factory.toml > "$tmp/factory.toml"
   cat >> "$tmp/factory.toml" <<TOML
 [worker_types.default]
@@ -81,11 +83,18 @@ echo "Ticket #$id is ready; waiting for a worker"
 
 # Prints state, assignee, comment and link changes until the ticket leaves ready/in_progress.
 prev=""
+killed=
 while :; do
   cur=$(factory ticket view "$id" | grep -E '^ +("(state|assignee|author|body)": |"https?://)')
   diff <(printf '%s\n' "$prev") <(printf '%s\n' "$cur") | sed -n "s/^> /$(date +%T) /p" || true
   prev=$cur
-  case $(printf '%s\n' "$cur" | sed -n 's/^  "state": "\(.*\)",*/\1/p') in
+  state=$(printf '%s\n' "$cur" | sed -n 's/^  "state": "\(.*\)",*/\1/p')
+  if [ -n "${DEMO_KILL:-}" ] && [ -z "$killed" ] && [ "$state" = in_progress ]; then
+    killed=$(docker ps -q --filter label=software-factory.worker_id)
+    docker rm -f $killed > /dev/null
+    echo "$(date +%T) killed the worker container; waiting for the reaper and a new worker"
+  fi
+  case $state in
     ready | in_progress) sleep 2 ;;
     *) break ;;
   esac

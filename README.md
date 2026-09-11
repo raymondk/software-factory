@@ -38,6 +38,18 @@ its prompt, and the agent implements the change, opens a pull request, links it,
 A human reviews. If the worker dies mid-run, the ticket keeps its state and the next worker resumes it.
 
 
+## Demo
+
+`demo/demo.sh` runs one ticket end to end: it builds the binaries and the worker image, starts the orchestrator and
+the Docker provider, creates a ticket, marks it `ready`, and prints the ticket's changes until it leaves the queue.
+The scheduler then stops the worker.
+
+    DEMO_AGENT=command demo/demo.sh "Try the factory"
+
+runs a shell stand-in for the agent and needs no credentials. `DEMO_KILL=1` kills the worker container mid-run to
+show the ticket staying `in_progress` and a fresh worker resuming it. For the real thing, edit `repos` in
+`demo/factory.toml`, export `GIT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`, and drop `DEMO_AGENT`.
+
 ## UI
 
 The UI is a Vite + Preact project in `crates/orchestrator/ui/`; `cargo build` runs `npm run build` and embeds the result, so run
