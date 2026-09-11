@@ -1,29 +1,39 @@
 # Software Factory
 
-Developers feed it work. It modifies tickets, makes pull requests, reviews code, merges, releases, and potentially deploys.
+Developers feed it tickets. Agents carry them through the delivery lifecycle: implementing, opening pull requests,
+and later reviewing, merging, releasing, and deploying. Design in `SPEC.md`.
 
-Built from separate components. Design in `SPEC.md`.
+## Goals
 
-## Demo
+- A team's ticket queue is the only input. Humans refine tickets, set their order, and review the results.
+- Workers are disposable. Any worker can pick up any available ticket, and a ticket survives its worker dying.
+- Humans steer through comments on the ticket. The agent reads them; nothing else is needed to redirect it.
+- Credentials stay where workers run. The orchestrator never sees a git or agent token.
+- Cost is visible per ticket.
 
-One ticket end to end through one worker: orchestrator, Docker provider, one container, a pull request.
+## Components
 
-Prerequisites: Docker, Rust, a GitHub repo you can push to, a git token with `repo` scope, and
-`CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`.
+- **Orchestrator**: owns tickets, comments, workers, and usage. Serves the REST API and the web UI. Decides when
+  workers are needed and reaps ones that stop heartbeating.
+- **Worker Provider**: a separate process that runs where the workers run. Starts and stops workers on request and
+  holds the credentials they need, so the orchestrator never sees them.
+- **Worker**: a runtime around an agent. Polls the orchestrator for a ticket, runs the agent with the prompt for the
+  ticket's state, reports usage, and repeats until stopped.
+- **CLI**: `factory`, which wraps the REST API. Used by the agent inside a worker to read and update its ticket, and by
+  developers to feed the factory.
 
-Stand-in agent (a shell script; no tokens or repo needed):
+## Feeding it work
 
-    DEMO_AGENT=command ./demo/demo.sh "Add a greeting" "Print hello from main"
+A developer works with an agent locally, with the CLI available and the factory skill loaded (`skills/factory`). The
+agent creates the tickets as the conversation produces them, with `factory ticket create`, and the developer refines
+them, reorders them, and marks them `ready`:
 
-Claude Code: set `repos` in `demo/factory.toml`, then
+    factory ticket edit 12 --state ready
 
-    export GIT_TOKEN=... CLAUDE_CODE_OAUTH_TOKEN=...
-    ./demo/demo.sh "Add a greeting" "Print hello from main"
+The factory picks up `ready` tickets in rank order. Comments left on a ticket are read by the agent working it, so
+that is how a developer redirects work in flight.
 
-The script builds the binaries and the worker image, starts the provider and the orchestrator, creates the ticket,
-moves it to `ready`, and prints state changes, comments, and links until the ticket leaves `in_progress`; then it
-prints `factory metrics` and `factory worker list` and stops everything. Generated configs and the
-`orchestrator.log` / `provider.log` files live in a temp dir printed on the first line.
+Flow: a ticket moves to `ready`. The scheduler asks the provider for a worker. The worker polls, gets the ticket and
+its prompt, and the agent implements the change, opens a pull request, links it, and moves the ticket to `in_review`.
+A human reviews. If the worker dies mid-run, the ticket keeps its state and the next worker resumes it.
 
-To manually drive the demo instead: `cargo run -p orchestrator -- factory.example.toml`, then
-`FACTORY_TOKEN=change-me cargo run -p factory -- ticket list`.
