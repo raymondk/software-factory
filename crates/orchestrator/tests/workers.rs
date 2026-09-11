@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use api_client::{Client, CreateComment, CreateRelation, CreateTicket, CreateWorker, Error, MoveTicket, NewWorker, ReportUsage, Totals, UpdateTicket};
+use api_client::{Client, CreateComment, CreateRelation, CreateTicket, CreateWorker, Error, MoveTicket, NewWorker, ReportUsage, ShipLogs, Totals, UpdateTicket};
 use tokio::sync::Barrier;
 
 mod common;
@@ -153,6 +153,53 @@ async fn poll_takes_lowest_ranked_available_for_type() {
     let p = rc.poll(&r.id, None).await.unwrap().expect("a ticket");
     assert_eq!((p.ticket.id, p.prompt.as_str()), (review, format!("Review #{review}").as_str()));
     assert!(rc.poll(&r.id, None).await.unwrap().is_none());
+}
+
+fn lines(run: Option<i64>, lines: &[&str]) -> ShipLogs {
+    ShipLogs { run, lines: lines.iter().map(|l| l.to_string()).collect() }
+}
+
+#[tokio::test]
+async fn poll_opens_a_run_usage_ends_it_and_logs_are_kept_per_worker_and_run() {
+    let (url, _dir) = serve().await;
+    let human = Client::new(&url, TOKEN);
+    let (w, wc) = worker(&url, &human, "default").await;
+    let (w2, wc2) = worker(&url, &human, "default").await;
+    let t = ticket(&human, "a", "ready").await;
+
+    wc.ship_logs(&w.id, &lines(None, &["starting"])).await.unwrap();
+    let job = wc.poll(&w.id, None).await.unwrap().unwrap();
+    let run = job.run;
+    let runs = human.get_ticket(t).await.unwrap().runs;
+    assert_eq!((runs.len(), runs[0].id, runs[0].worker_id.as_str(), runs[0].ticket_id), (1, run, w.id.as_str(), t));
+    assert!(runs[0].ended_at.is_none() && !runs[0].started_at.is_empty());
+
+    wc.ship_logs(&w.id, &lines(Some(run), &["a", "b"])).await.unwrap();
+    assert_eq!(status(wc2.ship_logs(&w2.id, &lines(Some(run), &["x"])).await), 400, "another worker's run");
+    assert_eq!(status(wc2.ship_logs(&w.id, &lines(None, &["x"])).await), 403, "another worker's stream");
+    assert_eq!(status(human.ship_logs(&w.id, &lines(None, &["x"])).await), 403);
+
+    wc.report_usage(&w.id, &usage(t, 1, 1, 0.0)).await.unwrap();
+    assert!(human.get_ticket(t).await.unwrap().runs[0].ended_at.is_some());
+    wc.ship_logs(&w.id, &lines(None, &["idle"])).await.unwrap();
+
+    let all = human.worker_logs(&w.id, None).await.unwrap();
+    let view: Vec<_> = all.iter().map(|l| (l.line.as_str(), l.run_id)).collect();
+    assert_eq!(view, vec![("starting", None), ("a", Some(run)), ("b", Some(run)), ("idle", None)]);
+    assert!(all.windows(2).all(|w| w[0].id < w[1].id));
+    let of_run = human.run_logs(run, None).await.unwrap();
+    assert_eq!(of_run.iter().map(|l| l.line.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+    assert_eq!(human.run_logs(run, Some(of_run[0].id)).await.unwrap().iter().map(|l| l.line.as_str()).collect::<Vec<_>>(), ["b"]);
+    assert!(human.worker_logs(&w.id, Some(all.last().unwrap().id)).await.unwrap().is_empty());
+    assert!(wc2.run_logs(run, None).await.is_ok(), "any authenticated caller may read");
+    assert_eq!(status(human.run_logs(9999, None).await), 404);
+    assert_eq!(status(human.worker_logs("w-nope", None).await), 404);
+
+    // A second hand-out opens a second run, listed newest first.
+    human.update_ticket(t, &UpdateTicket { state: Some("ready".into()), assignee: Some(None), ..Default::default() }).await.unwrap();
+    let job2 = wc2.poll(&w2.id, None).await.unwrap().unwrap();
+    let runs = human.get_ticket(t).await.unwrap().runs;
+    assert_eq!(runs.iter().map(|r| r.id).collect::<Vec<_>>(), vec![job2.run, run]);
 }
 
 #[tokio::test]
@@ -359,6 +406,7 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     // The ticket keeps its state with the assignee cleared.
     let t = human.get_ticket(id).await.unwrap();
     assert_eq!((t.state.as_str(), t.assignee), ("in_progress", None));
+    assert!(t.runs[0].ended_at.is_some(), "reaping ends the worker's open run");
 
     // Dead tokens no longer authenticate.
     assert_eq!(status(wc.heartbeat(&w.id).await), 401);

@@ -7,7 +7,9 @@ use anyhow::{bail, Context};
 use api_client::{Client, CreateComment, Error, ReportUsage, UpdateTicket};
 
 mod adapter;
+mod log;
 use adapter::{Adapter, ClaudeCodeAdapter, CommandAdapter, Outcome, Usage};
+use log::{Log, Shipping};
 
 enum Failure {
     /// The orchestrator rejected the token: the worker was reaped. Exit.
@@ -22,6 +24,7 @@ struct Worker {
     token: String,
     workspace: PathBuf,
     poll_interval: Duration,
+    log: Log,
 }
 
 fn env(name: &str) -> anyhow::Result<String> {
@@ -33,10 +36,17 @@ fn duration(name: &str, default: &str) -> anyhow::Result<Duration> {
     humantime::parse_duration(&text).with_context(|| format!("{name}={text:?}"))
 }
 
+fn number(name: &str, default: usize) -> anyhow::Result<usize> {
+    match std::env::var(name) {
+        Ok(text) => text.parse().with_context(|| format!("{name}={text:?}")),
+        Err(_) => Ok(default),
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run().await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(e) => {
             eprintln!("worker: {e:#}");
             ExitCode::FAILURE
@@ -44,7 +54,8 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run() -> anyhow::Result<()> {
+/// `Err` only for configuration problems, before the log ships; a failure while serving is logged and flushed.
+async fn run() -> anyhow::Result<ExitCode> {
     let url = env("FACTORY_URL")?;
     let id = env("FACTORY_WORKER_ID")?;
     let token = std::env::var("FACTORY_WORKER_TOKEN").or_else(|_| env("FACTORY_TOKEN"))?;
@@ -57,16 +68,35 @@ async fn run() -> anyhow::Result<()> {
     let heartbeat_interval = duration("FACTORY_HEARTBEAT_INTERVAL", "10s")?;
     let poll_interval = duration("FACTORY_POLL_INTERVAL", "5s")?;
     let agent = std::env::var("FACTORY_AGENT").unwrap_or_else(|_| "command".into());
-    let worker = Arc::new(Worker { client: Client::new(&url, &token), id, url, token, workspace, poll_interval });
-    eprintln!("worker {} ({worker_type}, agent {agent}) starting; workspace {}", worker.id, worker.workspace.display());
-    match agent.as_str() {
-        "command" => worker.serve(&CommandAdapter { command: env("FACTORY_AGENT_COMMAND")? }, heartbeat_interval).await,
-        "claude-code" => {
+    let shipping = Shipping {
+        interval: duration("FACTORY_LOG_INTERVAL", "1s")?,
+        batch: number("FACTORY_LOG_BATCH", 100)?,
+        max_line: number("FACTORY_LOG_MAX_LINE", 16 * 1024)?,
+    };
+    let command = match agent.as_str() {
+        "command" => Some(env("FACTORY_AGENT_COMMAND")?),
+        "claude-code" => None,
+        other => bail!("unknown FACTORY_AGENT {other:?}"),
+    };
+    let log = Log::start(Client::new(&url, &token), id.clone(), shipping);
+    let worker = Arc::new(Worker { client: Client::new(&url, &token), id, url, token, workspace, poll_interval, log });
+    worker.log.line(format!("worker {} ({worker_type}, agent {agent}) starting; workspace {}", worker.id, worker.workspace.display()));
+    let result = match command {
+        Some(command) => worker.serve(&CommandAdapter { command }, heartbeat_interval).await,
+        None => {
             let bin = std::env::var("FACTORY_CLAUDE_BIN").unwrap_or_else(|_| "claude".into());
             worker.serve(&ClaudeCodeAdapter { bin }, heartbeat_interval).await
         }
-        other => bail!("unknown FACTORY_AGENT {other:?}"),
-    }
+    };
+    let code = match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            worker.log.line(format!("worker: {e:#}"));
+            ExitCode::FAILURE
+        }
+    };
+    worker.log.flush().await;
+    Ok(code)
 }
 
 async fn shutdown() {
@@ -97,7 +127,7 @@ impl Worker {
         loop {
             tokio::select! {
                 _ = &mut stop => {
-                    eprintln!("worker {}: stopping", self.id);
+                    self.log.line(format!("worker {}: stopping", self.id));
                     return Ok(());
                 }
                 _ = &mut dead_rx => return Err(reaped()),
@@ -105,7 +135,7 @@ impl Worker {
                     Ok(next) => exclude = next,
                     Err(Failure::Unauthorized) => return Err(reaped()),
                     Err(Failure::Api(e)) => {
-                        eprintln!("worker {}: {e}", self.id);
+                        self.log.line(format!("worker {}: {e}", self.id));
                         tokio::time::sleep(self.poll_interval).await;
                     }
                 },
@@ -122,7 +152,7 @@ impl Worker {
             match self.client.heartbeat(&self.id).await {
                 Ok(_) => {}
                 Err(Error::Api { status: 401, .. }) => return,
-                Err(e) => eprintln!("worker {}: heartbeat: {e}", self.id),
+                Err(e) => self.log.line(format!("worker {}: heartbeat: {e}", self.id)),
             }
         }
     }
@@ -136,7 +166,7 @@ impl Worker {
                 Err(Error::Api { status: 401, .. }) => return Err(Failure::Unauthorized),
                 Err(Error::Api { status, body }) if status < 500 => return Err(Failure::Api(Error::Api { status, body })),
                 Err(e) => {
-                    eprintln!("worker {}: {what}: {e}; retrying in {}", self.id, humantime::format_duration(delay));
+                    self.log.line(format!("worker {}: {what}: {e}; retrying in {}", self.id, humantime::format_duration(delay)));
                     tokio::time::sleep(delay).await;
                     delay = (delay * 2).min(Duration::from_secs(30));
                 }
@@ -152,28 +182,32 @@ impl Worker {
             return Ok(None);
         };
         let ticket = job.ticket.id;
-        eprintln!("worker {}: ticket #{ticket} ({}): {}", self.id, job.ticket.state, job.ticket.title);
+        self.log.set_run(Some(job.run));
+        self.log.line(format!("worker {}: ticket #{ticket} ({}), run {}: {}", self.id, job.ticket.state, job.run, job.ticket.title));
         let result = match self.prepare(ticket, &job.repos) {
-            Ok(env) => adapter.run(&job.prompt, &self.workspace, job.run_timeout, &env).await,
+            Ok(env) => adapter.run(&job.prompt, &self.workspace, job.run_timeout, &env, &self.log).await,
             Err(e) => Err(e),
         };
         let (outcome, usage) = result.unwrap_or_else(|e| {
             (Outcome { success: false, timed_out: false, summary: format!("agent could not run: {e:#}"), links: vec![] }, Usage::default())
         });
-        eprintln!(
+        self.log.line(format!(
             "worker {}: ticket #{ticket}: {} (success {}, links {:?}; {} in, {} out, ${:.4})",
             self.id, outcome.summary, outcome.success, outcome.links, usage.tokens_in, usage.tokens_out, usage.cost
-        );
+        ));
         let report = ReportUsage { ticket_id: ticket, tokens_in: usage.tokens_in, tokens_out: usage.tokens_out, cost: usage.cost };
+        // The usage report ends the run on the orchestrator; lines from here on belong to no run.
         self.call("report usage", || self.client.report_usage(&self.id, &report)).await?;
+        self.log.set_run(None);
+        let log_url = format!("{}/#/tickets/{ticket}/runs/{}", self.url, job.run);
         // A state change by the agent releases the ticket; one still held is one the agent never moved.
         let current = self.call("get ticket", || self.client.get_ticket(ticket)).await?;
         let held = current.assignee.as_deref() == Some(&self.id);
         let (comment, patch) = if outcome.timed_out {
-            let body = format!("Run timed out after {}; leaving {} for another worker", humantime::format_duration(job.run_timeout), current.state);
+            let body = format!("Run timed out after {}; leaving {} for another worker. Log: {log_url}", humantime::format_duration(job.run_timeout), current.state);
             (Some(body), held.then(|| UpdateTicket { assignee: Some(None), ..Default::default() }))
         } else if held {
-            let body = format!("Agent finished without moving the ticket out of {}; marking it failed ({})", current.state, outcome.summary);
+            let body = format!("Agent finished without moving the ticket out of {}; marking it failed ({}). Log: {log_url}", current.state, outcome.summary);
             (Some(body), Some(UpdateTicket { state: Some("failed".into()), ..Default::default() }))
         } else {
             (None, None)

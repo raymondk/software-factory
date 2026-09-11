@@ -79,6 +79,11 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .relation.blocking a { color: var(--icp-accent-strong); font-weight: 500; }
 .relation button { margin-left: auto; font-size: 11px; padding: .1rem .5rem; }
 #relations form { grid-template-columns: auto minmax(0, 1fr) auto; margin-top: .75rem; }
+#runs { margin-top: 1rem; }
+.run { display: flex; gap: .75rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--icp-rule); font: 12px var(--mono); color: var(--icp-fg-secondary); }
+.run.selected a { font-weight: 600; }
+.log { font: 12px/1.45 var(--mono); background: var(--icp-bg-sunk); color: var(--icp-fg); padding: .6rem .75rem; margin: .5rem 0 0; max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#worker-log .log { max-height: calc(90vh - 6rem); }
 #workers tr[data-ticket] { cursor: pointer; }
 #workers tr[data-ticket]:hover { background: var(--icp-bg-sunk); }
 

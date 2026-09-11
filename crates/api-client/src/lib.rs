@@ -22,6 +22,9 @@ pub struct Ticket {
     /// A `ready` ticket with an unfinished dependency; never handed to a worker.
     #[serde(default)]
     pub blocked: bool,
+    /// Agent runs on this ticket, newest first. Like `comments`, only `GET /tickets/{id}` fills this in.
+    #[serde(default)]
+    pub runs: Vec<Run>,
 }
 
 /// A relation seen from one ticket. `type` is `depends_on` (this ticket waits for `ticket`), `blocks` (`ticket`
@@ -41,6 +44,39 @@ pub struct Relation {
 pub struct CreateRelation {
     pub r#type: String,
     pub ticket: i64,
+}
+
+
+/// One agent run: from poll handing the ticket out to the worker's usage report (or its death).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Run {
+    pub id: i64,
+    pub ticket_id: i64,
+    pub worker_id: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+}
+
+/// A line a worker printed. `run_id` is null outside a run: startup, polling, a crash before the first poll.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogLine {
+    pub id: i64,
+    pub run_id: Option<i64>,
+    pub line: String,
+    pub created_at: String,
+}
+
+/// A batch of lines a worker ships, all from `run` (or none).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShipLogs {
+    pub run: Option<i64>,
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LogsAfter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +175,8 @@ pub struct PollRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PollResponse {
     pub ticket: Ticket,
+    /// The run this hand-out opened; ended by the worker's usage report.
+    pub run: i64,
     pub prompt: String,
     pub repos: Vec<String>,
     /// The worker type's `run_timeout`, e.g. "1h".
@@ -317,6 +355,22 @@ impl Client {
 
     pub async fn report_usage(&self, id: &str, req: &ReportUsage) -> Result<Usage, Error> {
         let r = self.http.post(format!("{}/workers/{id}/usage", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn ship_logs(&self, id: &str, req: &ShipLogs) -> Result<(), Error> {
+        let r = self.http.post(format!("{}/workers/{id}/logs", self.base)).bearer_auth(&self.token).json(req);
+        Self::check(r).await.map(|_| ())
+    }
+
+    /// Lines after `after` (all when `None`), oldest first, at most 1000.
+    pub async fn worker_logs(&self, id: &str, after: Option<i64>) -> Result<Vec<LogLine>, Error> {
+        let r = self.http.get(format!("{}/workers/{id}/logs", self.base)).bearer_auth(&self.token).query(&LogsAfter { after });
+        Self::send(r).await
+    }
+
+    pub async fn run_logs(&self, run: i64, after: Option<i64>) -> Result<Vec<LogLine>, Error> {
+        let r = self.http.get(format!("{}/runs/{run}/logs", self.base)).bearer_auth(&self.token).query(&LogsAfter { after });
         Self::send(r).await
     }
 

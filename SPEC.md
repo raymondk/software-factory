@@ -77,6 +77,7 @@ Transitions are not restricted by the orchestrator beyond the ACL. Prompts tell 
 - `comments`
 - `relations`: see 3.7
 - `blocked`: a `ready` ticket with an unfinished dependency
+- `runs`: agent runs on the ticket, newest first (4.7)
 
 ### 3.7 Relations
 
@@ -95,7 +96,7 @@ Ticket JSON lists each relation with the other ticket's id, title and state, as 
 
 ### 4.1 Responsibilities
 
-- Store tickets, comments, worker registry, and usage records.
+- Store tickets, comments, worker registry, usage records, runs, and worker logs.
 - Serve the REST API, web UI, and the endpoints the CLI and workers use.
 - Schedule workers.
 - Reap dead workers.
@@ -120,8 +121,11 @@ Tickets:
 Workers:
 - `POST /workers/{id}/register`: worker confirms it is alive. The id and token were assigned by the orchestrator before start.
 - `POST /workers/{id}/heartbeat`
-- `POST /workers/{id}/poll`: returns the lowest-ranked available, unblocked ticket for this worker's type, with the prompt for its current state and the project's repos, or nothing. Sets assignee atomically. An optional body `{"exclude": <ticket id>}` (the ticket the worker just timed out on) makes that ticket last in line: it is returned only when nothing else is available.
-- `POST /workers/{id}/usage`: report token and cost usage for a ticket.
+- `POST /workers/{id}/poll`: returns the lowest-ranked available, unblocked ticket for this worker's type, with the prompt for its current state, the project's repos, and the id of the run it opens, or nothing. Sets assignee atomically. An optional body `{"exclude": <ticket id>}` (the ticket the worker just timed out on) makes that ticket last in line: it is returned only when nothing else is available.
+- `POST /workers/{id}/usage`: report token and cost usage for a ticket. Ends the worker's open run.
+- `POST /workers/{id}/logs`: body `{ run, lines }`; `run` is one of the worker's runs or null.
+- `GET /workers/{id}/logs?after=<line id>`: the worker's whole stream, oldest first, at most 1000 lines per call.
+- `GET /runs/{id}/logs?after=<line id>`: one run's lines, same shape. `after` supports polling for live output.
 - `GET /workers`: list workers and their status.
 
 Metrics:
@@ -139,13 +143,13 @@ Later: worker affinity.
 
 ### 4.4 Reaper
 
-A worker that misses heartbeats for longer than `heartbeat_timeout` is marked dead. Any ticket it holds keeps its state and has its assignee cleared. Since `in_progress` is workable, the next worker resumes it. The provider is asked to stop the dead worker.
+A worker that misses heartbeats for longer than `heartbeat_timeout` is marked dead. Any ticket it holds keeps its state and has its assignee cleared, and its open run is ended. Since `in_progress` is workable, the next worker resumes it. The provider is asked to stop the dead worker.
 
 There is no retry cap. A ticket that keeps killing workers is caught by humans watching the UI.
 
 ### 4.5 Web UI
 
-Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments and relations, allows creating, editing, relating, reordering tickets and changing state, shows workers and metrics.
+Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments, relations and runs, allows creating, editing, relating, reordering tickets and changing state, shows workers and metrics. A run's log opens from the ticket at `#/tickets/{id}/runs/{run}` and a worker's at `#/workers/{id}`, both following live while open.
 
 Auth: the orchestrator injects the shared token into the page when serving it, and the UI sends it as a bearer header. Anyone who can load the page has the token, so the network decides who can use the UI.
 
@@ -153,7 +157,13 @@ Auth: the orchestrator injects the shared token into the page when serving it, a
 
 ### 4.6 CLI
 
-`factory` command that wraps the REST API with the same capabilities as the UI. Configured with the orchestrator URL and a token via environment. Intended to be run by an agent, both inside a worker and by a developer working with an agent locally.
+`factory` command that wraps the REST API with the same capabilities as the UI. Configured with the orchestrator URL and a token via environment. Intended to be run by an agent, both inside a worker and by a developer working with an agent locally. `factory ticket logs <id> [--run <n>] [-f]` and `factory worker logs <id> [-f]` print logs, `-f` following until the run ends or the worker dies.
+
+### 4.7 Runs and logs
+
+A **run** is one hand-out of a ticket to a worker: opened by poll, ended by the worker's usage report or by the reaper. A ticket lists its runs.
+
+A worker ships every line it prints and every line its agent prints to the orchestrator, tagged with the current run or with none (startup, polling, a crash before the first poll). Lines are raw text, truncated at 16 KiB, sent in batches every second or every 100 lines, whichever comes first, so a crash loses at most one batch. Interval, batch size and line limit are worker configuration (`FACTORY_LOG_INTERVAL`, `FACTORY_LOG_BATCH`, `FACTORY_LOG_MAX_LINE`). The orchestrator keeps everything; nothing is purged yet.
 
 ## 5. Worker Provider
 
@@ -179,8 +189,8 @@ MVP implementation: a Docker provider binary that runs the worker image on the l
 2. Poll for a ticket.
 3. Receive ticket, prompt, and repo list.
 4. Prepare workspace: configure git and gh credentials. Repos are not cloned here; the agent clones what it needs, on demand, and reuses what is already present from earlier tickets.
-5. Run the agent through the adapter with the prompt and the worker type's `run_timeout`. On timeout, kill the agent, comment on the ticket, and leave it in `in_progress` for another worker to resume.
-6. Report usage. If the agent finished but left the ticket in `in_progress`, move it to `failed` with a comment explaining why.
+5. Run the agent through the adapter with the prompt and the worker type's `run_timeout`, shipping its output as it arrives (4.7). On timeout, kill the agent, comment on the ticket, and leave it in `in_progress` for another worker to resume.
+6. Report usage. If the agent finished but left the ticket in `in_progress`, move it to `failed` with a comment explaining why. Both comments link to the run's log in the UI.
 7. Repeat from 2 until the orchestrator stops the worker.
 
 ### 6.2 Agent adapter
@@ -191,7 +201,7 @@ run(prompt, workspace, timeout) -> Outcome { success, summary, links }, Usage { 
 
 The agent updates the ticket itself using the `factory` CLI, which is in the image and pre-configured with the worker's token. The adapter does not parse agent output to learn the result. It reads the ticket state afterwards.
 
-MVP adapter: Claude Code CLI in non-interactive mode, authenticated with a Claude OAuth token rather than an API key. Later: Codex, Pi, others.
+MVP adapter: Claude Code CLI in non-interactive mode with `--output-format stream-json --verbose`, one JSON event per line, usage from the final `result` event; authenticated with a Claude OAuth token rather than an API key. Later: Codex, Pi, others.
 
 ### 6.3 Image
 
@@ -301,6 +311,7 @@ Out:
 - Additional workable states: `todo` for refinement, `in_review` for agent review, and states for merge, release, deploy.
 - External tracker sync (GitHub Issues, Jira).
 - Usage normalization across agents. Whether workers report tokens or dollars.
+- Log retention: purging old runs' lines.
 - Per-user auth.
 - Kubernetes and cloud VM providers.
 

@@ -89,6 +89,7 @@ impl Fixture {
             .env("FACTORY_AGENT_COMMAND", &agent)
             .env("FACTORY_POLL_INTERVAL", "100ms")
             .env("FACTORY_HEARTBEAT_INTERVAL", "300ms")
+            .env("FACTORY_LOG_INTERVAL", "100ms")
             .env("GIT_TOKEN", "t0k")
             .spawn()
             .unwrap();
@@ -154,6 +155,24 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
     let t = f.wait_for(id, |t| t.state == "in_review").await;
     assert_eq!(t.assignee, None);
     assert!(t.comments.is_empty());
+    // One run, ended by the usage report; the worker's and the agent's lines are shipped, run lines tagged with it.
+    let t = f.wait_for(id, |t| t.runs.first().is_some_and(|r| r.ended_at.is_some())).await;
+    assert_eq!((t.runs.len(), t.runs[0].worker_id.as_str(), t.runs[0].ticket_id), (1, wid.as_str(), id));
+    let run = t.runs[0].id;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let lines = loop {
+        let lines = f.human.worker_logs(&wid, None).await.unwrap();
+        if lines.iter().any(|l| l.line.starts_with("working") && l.run_id == Some(run)) {
+            break lines;
+        }
+        assert!(Instant::now() < deadline, "agent output never shipped: {lines:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(lines[0].line.starts_with(&format!("worker {wid} (default, agent command) starting")) && lines[0].run_id.is_none(), "{lines:?}");
+    assert!(lines.iter().any(|l| l.line.contains(&format!("ticket #{id} (ready), run {run}")) && l.run_id == Some(run)));
+    let of_run = f.human.run_logs(run, None).await.unwrap();
+    assert!(of_run.iter().all(|l| l.run_id == Some(run)) && of_run.iter().any(|l| l.line == "working"));
+    assert!(f.human.run_logs(run, Some(of_run.last().unwrap().id)).await.unwrap().is_empty());
     let prompt = format!("Work on #{id}: hello");
     assert_eq!(std::fs::read_to_string(ws.join("stdin.txt")).unwrap(), prompt);
     assert_eq!(std::fs::read_to_string(ws.join("prompt.txt")).unwrap(), prompt);
@@ -178,8 +197,11 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let second = f.ticket("again").await;
-    f.wait_for(second, |t| t.state == "in_review").await;
+    f.wait_for(second, |t| t.state == "in_review" && t.runs.first().is_some_and(|r| r.ended_at.is_some())).await;
     stop(child).await;
+    // The last line is flushed before exit; it belongs to no run.
+    let last = f.human.worker_logs(&wid, None).await.unwrap().pop().unwrap();
+    assert_eq!((last.line.as_str(), last.run_id), (format!("worker {wid}: stopping").as_str(), None));
 }
 
 #[tokio::test]
@@ -200,7 +222,11 @@ wait
         .await;
     let t = f.wait_for(id, |t| t.state == "done").await;
     assert_eq!(t.comments.len(), 1);
-    assert_eq!((t.comments[0].author.as_str(), t.comments[0].body.as_str()), (wid.as_str(), "Run timed out after 1s; leaving in_progress for another worker"));
+    let first_run = t.runs.last().unwrap().id; // newest first
+    assert_eq!(t.comments[0].author, wid);
+    assert_eq!(t.comments[0].body, format!("Run timed out after 1s; leaving in_progress for another worker. Log: {}/#/tickets/{id}/runs/{first_run}", f.url));
+    assert_eq!(t.runs.len(), 2);
+    assert!(t.runs.iter().all(|r| r.ended_at.is_some()));
     let deadline = Instant::now() + Duration::from_secs(5);
     while alive(&ws.join("self.pid")) || alive(&ws.join("child.pid")) {
         assert!(Instant::now() < deadline, "agent process group still alive");
@@ -241,7 +267,10 @@ async fn left_in_progress_is_failed() {
     assert_eq!(t.assignee, None);
     assert_eq!(t.comments.len(), 1);
     assert_eq!(t.comments[0].author, wid);
-    assert_eq!(t.comments[0].body, "Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 3)");
+    assert_eq!(
+        t.comments[0].body,
+        format!("Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 3). Log: {}/#/tickets/{id}/runs/{}", f.url, t.runs[0].id)
+    );
     stop(child).await;
 }
 
@@ -254,7 +283,10 @@ async fn left_in_progress_without_explicit_assignee_is_failed() {
     assert_eq!(t.assignee, None);
     assert_eq!(t.comments.len(), 1);
     assert_eq!(t.comments[0].author, wid);
-    assert_eq!(t.comments[0].body, "Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 0)");
+    assert_eq!(
+        t.comments[0].body,
+        format!("Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 0). Log: {}/#/tickets/{id}/runs/{}", f.url, t.runs[0].id)
+    );
     stop(child).await;
 }
 

@@ -1,6 +1,6 @@
 use api_client::{
-    Breakdown, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, Metrics, MoveTicket, NewWorker, PollRequest, PollResponse, Relation, ReportUsage,
-    Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, WorkerTypeKey,
+    Breakdown, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, LogLine, LogsAfter, Metrics, MoveTicket, NewWorker, PollRequest,
+    PollResponse, Relation, ReportUsage, Run, ShipLogs, Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, WorkerTypeKey,
 };
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
@@ -32,6 +32,8 @@ pub fn router(state: AppState) -> Router {
         .route("/workers/{id}/heartbeat", post(heartbeat))
         .route("/workers/{id}/poll", post(poll))
         .route("/workers/{id}/usage", post(report_usage))
+        .route("/workers/{id}/logs", get(worker_logs).post(ship_logs))
+        .route("/runs/{id}/logs", get(run_logs))
         .route("/metrics", get(metrics))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().route("/", get(ui)).route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT })).merge(api).with_state(state)
@@ -122,6 +124,7 @@ impl From<Row> for Ticket {
             unresolved_comments: r.unresolved_comments,
             relations: vec![],
             blocked: r.blocked,
+            runs: vec![],
         }
     }
 }
@@ -199,8 +202,28 @@ async fn full_ticket(state: &AppState, id: i64) -> Result<Ticket, ApiError> {
     let mut ticket: Ticket = row.ok_or(ApiError::NotFound)?.into();
     ticket.comments = comments_of(state, id).await?;
     ticket.relations = relations_of(state, id).await?;
+    let runs: Vec<RunRow> =
+        sqlx::query_as(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE ticket_id = ?1 ORDER BY id DESC")).bind(id).fetch_all(&state.pool).await?;
+    ticket.runs = runs.into_iter().map(Run::from).collect();
     Ok(ticket)
 }
+
+#[derive(sqlx::FromRow)]
+struct RunRow {
+    id: i64,
+    ticket_id: i64,
+    worker_id: String,
+    started_at: String,
+    ended_at: Option<String>,
+}
+
+impl From<RunRow> for Run {
+    fn from(r: RunRow) -> Run {
+        Run { id: r.id, ticket_id: r.ticket_id, worker_id: r.worker_id, started_at: r.started_at, ended_at: r.ended_at }
+    }
+}
+
+const RUN_COLUMNS: &str = "id, ticket_id, worker_id, started_at, ended_at";
 
 async fn comments_of(state: &AppState, ticket_id: i64) -> Result<Vec<Comment>, ApiError> {
     let rows: Vec<CommentRow> =
@@ -560,10 +583,15 @@ async fn poll(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     set_status(&mut *tx, &id, "busy").await?;
+    let (run,): (i64,) = sqlx::query_as(&format!("INSERT INTO runs (ticket_id, worker_id, started_at) VALUES (?1, ?2, {NOW}) RETURNING id"))
+        .bind(row.id)
+        .bind(&id)
+        .fetch_one(&mut *tx)
+        .await?;
     tx.commit().await?;
     let ticket: Ticket = row.into();
     let prompt = render(&prompts[&ticket.state], &ticket);
-    Ok(Json(PollResponse { ticket, prompt, repos: state.config.project.repos.clone(), run_timeout: wt.run_timeout }).into_response())
+    Ok(Json(PollResponse { ticket, run, prompt, repos: state.config.project.repos.clone(), run_timeout: wt.run_timeout }).into_response())
 }
 
 fn render(template: &str, t: &Ticket) -> String {
@@ -612,6 +640,7 @@ async fn report_usage(
 ) -> Result<(StatusCode, Json<Usage>), ApiError> {
     caller.require_worker(&id)?;
     ticket_exists(&state, req.ticket_id).await?;
+    sqlx::query(&format!("UPDATE runs SET ended_at = {NOW} WHERE worker_id = ?1 AND ended_at IS NULL")).bind(&id).execute(&state.pool).await?;
     let row: Option<UsageRow> = sqlx::query_as(&format!(
         "INSERT INTO usage (ticket_id, worker_id, worker_type, tokens_in, tokens_out, cost, created_at) \
          SELECT ?1, id, worker_type, ?2, ?3, ?4, {NOW} FROM workers WHERE id = ?5 RETURNING {USAGE_COLUMNS}"
@@ -624,6 +653,72 @@ async fn report_usage(
     .fetch_optional(&state.pool)
     .await?;
     row.map(|r| (StatusCode::CREATED, Json(r.into()))).ok_or(ApiError::NotFound)
+}
+
+#[derive(sqlx::FromRow)]
+struct LogRow {
+    id: i64,
+    run_id: Option<i64>,
+    line: String,
+    created_at: String,
+}
+
+impl From<LogRow> for LogLine {
+    fn from(r: LogRow) -> LogLine {
+        LogLine { id: r.id, run_id: r.run_id, line: r.line, created_at: r.created_at }
+    }
+}
+
+const LOG_COLUMNS: &str = "id, run_id, line, created_at";
+const LOG_PAGE: i64 = 1000;
+
+/// Spec 4.7: a worker ships a batch of its output. `run` must be one of its own runs.
+async fn ship_logs(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(req): Json<ShipLogs>,
+) -> Result<StatusCode, ApiError> {
+    caller.require_worker(&id)?;
+    let mut conn = state.pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    if let Some(run) = req.run {
+        let owned: Option<(i64,)> = sqlx::query_as("SELECT id FROM runs WHERE id = ?1 AND worker_id = ?2").bind(run).bind(&id).fetch_optional(&mut *tx).await?;
+        owned.ok_or(ApiError::BadRequest("run does not belong to this worker"))?;
+    }
+    for line in &req.lines {
+        sqlx::query(&format!("INSERT INTO log_lines (worker_id, run_id, line, created_at) VALUES (?1, ?2, ?3, {NOW})"))
+            .bind(&id)
+            .bind(req.run)
+            .bind(line)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `key` is compared as text; SQLite converts it for the integer `run_id` column.
+async fn logs_where(state: &AppState, column: &str, key: &str, after: Option<i64>) -> Result<Json<Vec<LogLine>>, ApiError> {
+    let rows: Vec<LogRow> = sqlx::query_as(&format!("SELECT {LOG_COLUMNS} FROM log_lines WHERE {column} = ?1 AND id > ?2 ORDER BY id ASC LIMIT {LOG_PAGE}"))
+        .bind(key)
+        .bind(after.unwrap_or(0))
+        .fetch_all(&state.pool)
+        .await?;
+    Ok(Json(rows.into_iter().map(LogLine::from).collect()))
+}
+
+/// The worker's whole stream, including lines outside runs.
+async fn worker_logs(State(state): State<AppState>, Path(id): Path<String>, Query(q): Query<LogsAfter>) -> Result<Json<Vec<LogLine>>, ApiError> {
+    let found: Option<(String,)> = sqlx::query_as("SELECT id FROM workers WHERE id = ?1").bind(&id).fetch_optional(&state.pool).await?;
+    found.ok_or(ApiError::NotFound)?;
+    logs_where(&state, "worker_id", &id, q.after).await
+}
+
+async fn run_logs(State(state): State<AppState>, Path(id): Path<i64>, Query(q): Query<LogsAfter>) -> Result<Json<Vec<LogLine>>, ApiError> {
+    let found: Option<(i64,)> = sqlx::query_as("SELECT id FROM runs WHERE id = ?1").bind(id).fetch_optional(&state.pool).await?;
+    found.ok_or(ApiError::NotFound)?;
+    logs_where(&state, "run_id", &id.to_string(), q.after).await
 }
 
 #[derive(sqlx::FromRow)]
