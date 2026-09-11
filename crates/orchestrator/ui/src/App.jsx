@@ -64,7 +64,7 @@ export function App() {
       <h1>Software Factory</h1>
       <div id="error">{error && <><span>{error.message}</span><button onClick={() => setError(null)}>×</button></>}</div>
       <section>
-        <CreateForm />
+        <CreateDialog />
         <div id="board">{tickets ? <Board tickets={tickets} selected={selected} /> : <span id="loading">Loading…</span>}</div>
       </section>
       <section id="detail">{ticket && <Detail key={ticket.id} ticket={ticket} usage={usage} />}</section>
@@ -74,22 +74,33 @@ export function App() {
   );
 }
 
-function CreateForm() {
-  const busy = useBusy();
+// "New ticket" opens a dialog with the form; a failed request shows its error inside and keeps the input.
+function CreateDialog() {
   const { refresh } = useApp();
+  const dialog = useRef();
+  const [error, setError] = useState(null);
+  const busy = useBusy(m => setError(m));
   const submit = busy(async e => {
     e.preventDefault();
     const form = e.currentTarget, f = new FormData(form);
     const t = await api("/tickets", { method: "POST", body: JSON.stringify({ title: f.get("title"), description: f.get("description") }) });
     form.reset();
+    dialog.current.close();
     await refresh();
     select(t.id);
   });
   return (
-    <form id="create" onSubmit={submit}>
-      <input name="title" placeholder="Title" required />
-      <textarea name="description" placeholder="Description" rows={1} />
-      <button>Create ticket</button>
-    </form>
+    <>
+      <div id="toolbar"><button class="primary" onClick={() => { setError(null); dialog.current.showModal(); }}>New ticket</button></div>
+      <dialog ref={dialog}>
+        <h2><span>New ticket</span><button onClick={() => dialog.current.close()}>Close</button></h2>
+        <form id="create" onSubmit={submit}>
+          {error && <div class="error">{error}</div>}
+          <input name="title" placeholder="Title" required />
+          <textarea name="description" placeholder="Description" rows={4} />
+          <button>Create ticket</button>
+        </form>
+      </dialog>
+    </>
   );
 }

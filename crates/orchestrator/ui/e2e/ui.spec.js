@@ -39,12 +39,18 @@ const card = (page, id) => page.locator(`.card[data-id="${id}"]`);
 const create = (server, title) => server.api("/tickets", { method: "POST", body: { title } });
 const ids = async (server, ...want) => (await server.api("/tickets")).map(t => t.id).filter(id => want.includes(id));
 
-test("creates a ticket from the form", async ({ page }) => {
+test("creates a ticket from the dialog", async ({ page }) => {
   await page.goto("/");
+  await page.click("button:text-is('New ticket')");
+  await expect(page.locator("dialog")).toBeVisible();
   await page.fill("#create input[name=title]", "Created in browser");
-  await page.click("#create button");
+  await page.click("#create button:text-is('Create ticket')");
+  await expect(page.locator("dialog")).toBeHidden();
   await expect(page.locator(".column.todo .card", { hasText: "Created in browser" })).toBeVisible();
   await expect(page).toHaveURL(/#\/tickets\/\d+$/);
+  await page.click("button:text-is('New ticket')");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("dialog")).toBeHidden();
 });
 
 test("opens a ticket by card click and by URL", async ({ page, server }) => {
@@ -107,12 +113,21 @@ test("shows a worker in the Workers panel", async ({ page, server }) => {
   await expect(row).toContainText("starting");
 });
 
-test("shows an inline error when a request fails", async ({ page }) => {
+test("shows a failed create inside the dialog and keeps the input", async ({ page }) => {
   await page.route("**/tickets", (route, req) =>
     req.method() === "POST" ? route.fulfill({ status: 400, contentType: "application/json", body: '{"error":"forced failure"}' }) : route.continue());
   await page.goto("/");
+  await page.click("button:text-is('New ticket')");
   await page.fill("#create input[name=title]", "Will fail");
-  await page.click("#create button");
+  await page.click("#create button:text-is('Create ticket')");
+  await expect(page.locator("dialog .error")).toContainText("forced failure");
+  await expect(page.locator("#create input[name=title]")).toHaveValue("Will fail");
+  await expect(page.locator("#error")).toBeEmpty();
+});
+
+test("shows an inline error when a refresh fails", async ({ page }) => {
+  await page.goto("/");
+  await page.route("**/workers", route => route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"forced failure"}' }));
   await expect(page.locator("#error")).toContainText("forced failure");
   await page.click("#error button");
   await expect(page.locator("#error")).toBeEmpty();

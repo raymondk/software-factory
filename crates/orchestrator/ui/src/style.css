@@ -21,20 +21,25 @@ a:hover { color: var(--icp-accent-strong); }
 button { font: 500 13px var(--sans); padding: .35rem .9rem; border-radius: 9999px; border: 1px solid var(--icp-fg); background: transparent; color: var(--icp-fg); cursor: pointer; }
 button:hover { background: var(--icp-bg-sunk); }
 button:disabled { opacity: .5; cursor: default; }
-form > button { background: var(--icp-accent); border-color: var(--icp-accent); color: #fff; }
-form > button:hover { background: var(--icp-accent-strong); border-color: var(--icp-accent-strong); }
+form > button, .primary { background: var(--icp-accent); border-color: var(--icp-accent); color: #fff; }
+form > button:hover, .primary:hover { background: var(--icp-accent-strong); border-color: var(--icp-accent-strong); }
 input, textarea, select { font: inherit; padding: .4rem .5rem; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); border-radius: 2px; }
 :focus-visible { outline: 2px solid var(--icp-accent); outline-offset: 1px; }
 
-#error { grid-column: 1 / -1; display: flex; gap: .5rem; align-items: center; padding: .5rem .75rem; background: var(--icp-accent-dim); color: var(--icp-accent-strong); border-left: 3px solid var(--icp-accent); }
+#error, .error { display: flex; gap: .5rem; align-items: center; padding: .5rem .75rem; background: var(--icp-accent-dim); color: var(--icp-accent-strong); border-left: 3px solid var(--icp-accent); }
+#error { grid-column: 1 / -1; }
 #error:empty { display: none; }
 #error button { margin-left: auto; border: 0; color: inherit; padding: 0 .4rem; }
 table { border-collapse: collapse; width: 100%; }
 td, th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--icp-rule); }
 #metrics td:not(:first-child), #workers td:first-child, #workers td:nth-child(4), #totals { font: 13px var(--mono); }
 form { display: grid; gap: .5rem; margin-bottom: 1rem; }
-#create { display: flex; align-items: start; }
-#create input { flex: 1; }
+#toolbar { margin-bottom: 1rem; }
+dialog { width: min(32rem, 90vw); padding: 1.25rem 1.5rem; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); }
+dialog::backdrop { background: rgba(26, 26, 26, .45); }
+dialog h2 { display: flex; gap: .5rem; align-items: center; }
+dialog h2 button { margin-left: auto; }
+dialog form { margin-bottom: 0; }
 pre { white-space: pre-wrap; }
 
 #board { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .5rem; }
