@@ -28,9 +28,17 @@
   summary { cursor: pointer; font-weight: bold; margin-bottom: .5rem; }
   #workers tr[data-ticket] { cursor: pointer; }
   #workers tr[data-ticket]:hover { background: #f4f4f4; }
-  .comment { border-top: 1px solid #ddd; padding: .5rem 0; }
+  .comment { border-top: 1px solid #ddd; border-left: 3px solid #ccc; padding: .5rem 0 .5rem .6rem; }
+  .comment.human { border-left-color: #5b9bd5; }
   .comment small { color: #888; }
+  .comment .tag { background: #eee; border-radius: 3px; padding: 0 .3em; }
+  .comment.human .tag { background: #dbe9f6; }
   .comment.resolved { color: #999; text-decoration: line-through; }
+  .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .body > * { margin: 0 0 .5rem; }
+  .body code { background: #f4f4f4; padding: 0 .2em; }
+  .body pre { background: #f4f4f4; padding: .4rem; }
+  .body.collapsed { max-height: 12em; overflow: hidden; mask-image: linear-gradient(#000 60%, transparent); }
 </style>
 <h1>Software Factory</h1>
 <div id="error"></div>
@@ -79,6 +87,30 @@
     b.disabled = true;
     try { await fn(e); } catch (err) { showError(err.message); } finally { b.disabled = false; }
   };
+  const ago = iso => {
+    const s = (Date.now() - Date.parse(iso)) / 1000;
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    if (s < 172800) return "yesterday";
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+  // Minimal markdown: escape first, then fenced code, paragraphs, lists, inline code, http(s) links.
+  const esc = s => s.replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+  const link = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
+  const inline = s => {
+    const codes = [];
+    return s.replace(/`([^`\n]+)`/g, (_, c) => `\0${codes.push(`<code>${c}</code>`) - 1}\0`)
+      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<]+?(?=[.,;:!?)]*(?:\s|$))/g,
+               (m, text, href) => link(href ?? m, text ?? m))
+      .replace(/\0(\d+)\0/g, (_, i) => codes[i]);
+  };
+  const markdown = src => esc(src).split(/^```[^\n]*\n([\s\S]*?)\n?^```[ \t]*$/m).map((part, i) =>
+    i % 2 ? `<pre><code>${part}</code></pre>` : part.split(/\n[ \t]*\n/).map(b => b.trim()).filter(Boolean).map(block => {
+      const lines = block.split("\n");
+      if (lines.every(l => /^\s*[-*] /.test(l))) return `<ul>${lines.map(l => `<li>${inline(l.replace(/^\s*[-*] /, ""))}</li>`).join("")}</ul>`;
+      return `<p>${inline(block)}</p>`;
+    }).join("")).join("");
   const STATES = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
   const stateSelect = (select, value) => {
     for (const s of STATES) { const o = el("option", s); o.value = s; o.selected = s === value; select.append(o); }
@@ -173,8 +205,15 @@
     const thread = el("section");
     for (const c of t.comments) {
       const div = el("div");
-      div.className = "comment" + (c.resolved ? " resolved" : "");
-      const meta = el("small", `${c.author} · ${c.created_at} `);
+      const kind = c.author === "human" ? "human" : "worker";
+      div.className = `comment ${kind}` + (c.resolved ? " resolved" : "");
+      div.hidden = c.resolved;
+      const tag = el("span", kind);
+      tag.className = "tag";
+      const time = el("span", ago(c.created_at));
+      time.title = c.created_at;
+      const meta = el("small");
+      meta.append(kind === "worker" ? c.author + " " : "", tag, " · ", time, " ");
       if (!c.resolved) {
         const resolve = el("button", "Resolve");
         resolve.onclick = busy(async () => {
@@ -184,8 +223,27 @@
         });
         meta.append(resolve);
       }
-      div.append(meta, el("pre", c.body));
+      const body = el("div");
+      body.className = "body";
+      body.innerHTML = markdown(c.body);
+      div.append(meta, body);
+      if (c.body.length > 600 || c.body.split("\n").length > 12) {
+        body.classList.add("collapsed");
+        const more = el("button", "Show more");
+        more.onclick = () => { more.textContent = body.classList.toggle("collapsed") ? "Show more" : "Show less"; };
+        div.append(more);
+      }
       thread.append(div);
+    }
+    const resolved = t.comments.filter(c => c.resolved).length;
+    if (resolved) {
+      const toggle = el("button", `Show ${resolved} resolved`);
+      toggle.onclick = () => {
+        const shown = toggle.textContent.startsWith("Show");
+        for (const r of thread.querySelectorAll(".resolved")) r.hidden = !shown;
+        toggle.textContent = `${shown ? "Hide" : "Show"} ${resolved} resolved`;
+      };
+      thread.append(toggle);
     }
     const commentForm = el("form");
     const body = Object.assign(el("textarea"), { name: "body", rows: 3, placeholder: "Comment", required: true });
