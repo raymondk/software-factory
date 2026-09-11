@@ -38,6 +38,8 @@
   .body > * { margin: 0 0 .5rem; }
   .body code { background: #f4f4f4; padding: 0 .2em; }
   .body pre { background: #f4f4f4; padding: .4rem; }
+  .notice { padding: .4rem .6rem; background: #fff3cd; color: #664d03; border-radius: 4px; }
+  .notice button { margin-left: .5rem; }
   .body.collapsed { max-height: 12em; overflow: hidden; mask-image: linear-gradient(#000 60%, transparent); }
 </style>
 <h1>Software Factory</h1>
@@ -184,25 +186,71 @@
     return b;
   }
 
+  let selected = null, pane = null; // the open ticket id and its pane (rebuilt only when another ticket is opened)
+
   async function show(id) {
+    selected = id;
     const [t, m] = await Promise.all([api("/tickets/" + id), listMetrics()]);
+    if (selected !== id) return;
     const u = m.per_ticket.find(x => x.ticket_id === id) ?? { tokens_in: 0, tokens_out: 0, cost: 0 };
-    const d = document.getElementById("detail");
+    if (pane?.id !== id) pane = buildPane(id);
+    pane.update(t, u);
+  }
+
+  const FIELDS = ["title", "state", "description", "links"];
+
+  // Builds the detail pane once; update() refreshes the read-only parts in place and never touches text the user typed.
+  function buildPane(id) {
+    const header = el("h2"), meta = el("p"), dates = el("p"), usage = el("p"), thread = el("section");
     const form = el("form");
-    const title = Object.assign(el("input"), { name: "title", value: t.title, required: true });
-    const state = stateSelect(el("select"), t.state);
-    const description = Object.assign(el("textarea"), { name: "description", value: t.description, rows: 6 });
-    const links = Object.assign(el("textarea"), { name: "links", value: t.links.join("\n"), rows: 3, placeholder: "Links, one per line" });
-    form.append(title, state, description, links, el("button", "Save"));
+    const notice = el("div", "Ticket changed on the server. ");
+    notice.className = "notice";
+    const reload = Object.assign(el("button", "Reload"), { type: "button" });
+    notice.append(reload);
+    form.append(notice, Object.assign(el("input"), { name: "title", required: true }),
+                stateSelect(Object.assign(el("select"), { name: "state" })),
+                Object.assign(el("textarea"), { name: "description", rows: 6 }),
+                Object.assign(el("textarea"), { name: "links", rows: 3, placeholder: "Links, one per line" }),
+                el("button", "Save"));
+    let loaded, server, comments; // loaded: values the form was last filled with; server: latest from the server
+    const values = () => Object.fromEntries(FIELDS.map(k => [k, form[k].value]));
+    const same = (a, b) => FIELDS.every(k => a[k] === b[k]);
+    const fill = v => { loaded = v; for (const k of FIELDS) form[k].value = v[k]; };
+    reload.onclick = () => { fill(server); notice.hidden = true; };
     form.onsubmit = busy(async e => {
       e.preventDefault();
-      const body = { title: title.value, state: state.value, description: description.value,
-                     links: links.value.split("\n").map(l => l.trim()).filter(Boolean) };
-      await api("/tickets/" + t.id, { method: "PATCH", body: JSON.stringify(body) });
+      const body = { ...values(), links: form.links.value.split("\n").map(l => l.trim()).filter(Boolean) };
+      await api("/tickets/" + id, { method: "PATCH", body: JSON.stringify(body) });
       await list();
-      await show(t.id);
+      await show(id);
     });
-    const thread = el("section");
+    const commentForm = el("form");
+    const body = Object.assign(el("textarea"), { name: "body", rows: 3, placeholder: "Comment", required: true });
+    commentForm.append(body, el("button", "Comment"));
+    commentForm.onsubmit = busy(async e => {
+      e.preventDefault();
+      await api("/tickets/" + id + "/comments", { method: "POST", body: JSON.stringify({ body: body.value }) });
+      body.value = "";
+      await list();
+      await show(id);
+    });
+    document.getElementById("detail").replaceChildren(header, meta, dates, usage, form, el("h3", "Comments"), thread, commentForm);
+    const update = (t, u) => {
+      header.textContent = `#${t.id} ${t.title}`;
+      meta.textContent = `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`;
+      dates.textContent = `created: ${t.created_at} · updated: ${t.updated_at}`;
+      usage.textContent = usageLine(u);
+      server = { title: t.title, state: t.state, description: t.description, links: t.links.join("\n") };
+      if (!loaded || same(values(), loaded) || same(values(), server)) fill(server); // an untouched (or already matching) form follows the server silently
+      notice.hidden = same(server, loaded);
+      const json = JSON.stringify(t.comments);
+      if (json !== comments) { comments = json; renderThread(thread, t); }
+    };
+    return { id, update };
+  }
+
+  function renderThread(thread, t) {
+    thread.replaceChildren();
     for (const c of t.comments) {
       const div = el("div");
       const kind = c.author === "human" ? "human" : "worker";
@@ -245,25 +293,6 @@
       };
       thread.append(toggle);
     }
-    const commentForm = el("form");
-    const body = Object.assign(el("textarea"), { name: "body", rows: 3, placeholder: "Comment", required: true });
-    commentForm.append(body, el("button", "Comment"));
-    commentForm.onsubmit = busy(async e => {
-      e.preventDefault();
-      await api("/tickets/" + t.id + "/comments", { method: "POST", body: JSON.stringify({ body: body.value }) });
-      await list();
-      await show(t.id);
-    });
-    d.replaceChildren(
-      el("h2", "#" + t.id + " " + t.title),
-      el("p", `rank: ${t.rank} · assignee: ${t.assignee ?? "none"}`),
-      el("p", `created: ${t.created_at} · updated: ${t.updated_at}`),
-      el("p", usageLine(u)),
-      form,
-      el("h3", "Comments"),
-      thread,
-      commentForm,
-    );
   }
 
   document.getElementById("create").onsubmit = busy(async e => {
@@ -275,9 +304,12 @@
     await show(t.id);
   });
 
-  const refresh = () => Promise.all([listWorkers(), listMetrics()]);
-  list().then(refresh).catch(e => showError(e.message)).finally(() => document.getElementById("loading")?.remove());
+  const refresh = () => Promise.all([list(), listWorkers(), selected == null ? listMetrics() : show(selected)]);
+  refresh().catch(e => showError(e.message)).finally(() => document.getElementById("loading")?.remove());
+  // Polls while the tab is visible and refreshes as soon as it becomes visible again.
   // A refresh error is shown once (replaced, not stacked) and cleared by the next successful refresh.
-  setInterval(() => refresh().then(() => error.classList.contains("refresh") && error.replaceChildren(),
-                                   e => showError(e.message, true)), 5000);
+  const tick = () => document.hidden || refresh().then(() => error.classList.contains("refresh") && error.replaceChildren(),
+                                                       e => showError(e.message, true));
+  setInterval(tick, 3000);
+  document.addEventListener("visibilitychange", tick);
 </script>
