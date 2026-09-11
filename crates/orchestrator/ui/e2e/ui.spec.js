@@ -5,7 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-const root = path.join(import.meta.dirname, "..", "..");
+const root = path.join(import.meta.dirname, "..", "..", "..", "..");
 const TOKEN = "change-me";
 const freePort = () => new Promise(resolve => {
   const s = net.createServer().listen(0, () => { const { port } = s.address(); s.close(() => resolve(port)); });

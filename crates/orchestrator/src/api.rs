@@ -13,8 +13,8 @@ use sqlx::{Connection, SqliteExecutor};
 use crate::config::Config;
 use crate::{AppState, STATES};
 
-/// Built by `npm run build` in `ui/`.
-const UI: &str = include_str!("../../../ui/dist/index.html");
+/// Built by build.rs.
+const UI: &str = include_str!("../ui/dist/index.html");
 /// Neighbouring ranks closer than this trigger renormalization.
 const MIN_GAP: f64 = 1e-6;
 

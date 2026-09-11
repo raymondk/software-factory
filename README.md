@@ -40,6 +40,6 @@ A human reviews. If the worker dies mid-run, the ticket keeps its state and the 
 
 ## UI
 
-The UI is a Vite + Preact project in `ui/`. `cargo build` embeds `ui/dist/index.html`, so build it first: `cd ui && npm ci && npm run build`.
-`npm run dev` serves it against an orchestrator on `localhost:8080` (set `VITE_TOKEN`). `npm test` runs unit tests; `npm run e2e` builds
-everything and runs the Playwright tests, which start their own orchestrator (once: `npx playwright install chromium`).
+The UI is a Vite + Preact project in `crates/orchestrator/ui/`; `cargo build` runs `npm run build` and embeds the result, so run
+`npm ci` there once. `npm run dev` serves it against an orchestrator on `localhost:8080` (set `VITE_TOKEN`). `npm test` runs unit
+tests; `npm run e2e` runs the Playwright tests, which start their own orchestrator (once: `npx playwright install chromium`).

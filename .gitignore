@@ -18,6 +18,6 @@
 *.db-*
 
 # UI
-ui/node_modules
-ui/dist
-ui/test-results
+crates/orchestrator/ui/node_modules
+crates/orchestrator/ui/dist
+crates/orchestrator/ui/test-results

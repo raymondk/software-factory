@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "test": "vitest run",
-    "e2e": "npm run build && cargo build -p orchestrator -p factory && playwright test"
+    "e2e": "cargo build -p orchestrator -p factory && playwright test"
   },
   "dependencies": {
     "preact": "^10.29.8"
