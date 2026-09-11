@@ -110,7 +110,7 @@ function CreateDialog() {
           <input name="title" placeholder="Title" required />
           <select name="state">{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
           <textarea name="description" placeholder="Description" rows={16} />
-          <button>Create ticket</button>
+          <div class="row"><button class="primary">Create ticket</button></div>
         </form>
       </dialog>
     </>

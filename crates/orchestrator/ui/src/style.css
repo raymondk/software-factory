@@ -20,8 +20,8 @@ a:hover { color: var(--icp-accent-strong); }
 button { font: 500 13px var(--sans); padding: .35rem .9rem; border-radius: 9999px; border: 1px solid var(--icp-fg); background: transparent; color: var(--icp-fg); cursor: pointer; }
 button:hover { background: var(--icp-bg-sunk); }
 button:disabled { opacity: .5; cursor: default; }
-form > button, .primary { background: var(--icp-accent); border-color: var(--icp-accent); color: #fff; }
-form > button:hover, .primary:hover { background: var(--icp-accent-strong); border-color: var(--icp-accent-strong); }
+.primary { background: var(--icp-accent); border-color: var(--icp-accent); color: #fff; }
+.primary:hover { background: var(--icp-accent-strong); border-color: var(--icp-accent-strong); }
 input, textarea, select { font: inherit; padding: .4rem .5rem; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); border-radius: 2px; }
 :focus-visible { outline: 2px solid var(--icp-accent); outline-offset: 1px; }
 
@@ -33,8 +33,8 @@ table { border-collapse: collapse; width: 100%; }
 td, th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--icp-rule); }
 #metrics td:not(:first-child), #workers td:first-child, #workers td:nth-child(4), #totals { font: 13px var(--mono); }
 form { display: grid; gap: .5rem; margin-bottom: 1rem; }
-.row { display: flex; gap: .75rem; align-items: center; }
-.row > button { flex: 1; }
+/* Form submit buttons sit in a row aligned to the right, at the same pill size as every other button. */
+.row { display: flex; gap: .75rem; align-items: center; justify-content: flex-end; }
 .saved { color: var(--icp-fg-secondary); font-size: 13px; }
 #toolbar { margin-bottom: 1rem; }
 dialog { width: 92vw; max-width: 90rem; height: 90vh; padding: 0; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); }
