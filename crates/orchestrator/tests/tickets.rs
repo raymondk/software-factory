@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use api_client::{Client, CreateComment, CreateTicket, Error, ListTickets, MoveTicket, UpdateTicket};
+use api_client::{Client, CreateComment, CreateRelation, CreateTicket, Error, ListTickets, MoveTicket, UpdateTicket};
 
 mod common;
 use common::TOKEN;
@@ -327,4 +327,72 @@ async fn comment_errors() {
     }
     assert_eq!(client.list_comments(t.id).await.unwrap().len(), 1);
     assert!(!client.get_ticket(t.id).await.unwrap().comments[0].resolved);
+}
+
+fn relation(kind: &str, ticket: i64) -> CreateRelation {
+    CreateRelation { r#type: kind.into(), ticket }
+}
+
+fn bad_request<T: std::fmt::Debug>(r: Result<T, Error>, msg: &str) {
+    match r {
+        Err(Error::Api { status: 400, body }) => assert!(body.contains(msg), "{body}"),
+        other => panic!("expected 400 {msg:?}, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn relations_are_created_listed_and_deleted() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    let a = client.create_ticket(&new("a")).await.unwrap().id;
+    let b = client.create_ticket(&CreateTicket { state: Some("done".into()), ..new("b") }).await.unwrap().id;
+    let c = client.create_ticket(&new("c")).await.unwrap().id;
+
+    client.add_relation(a, &relation("depends_on", b)).await.unwrap();
+    let t = client.add_relation(a, &relation("related_to", c)).await.unwrap();
+    let view: Vec<_> = t.relations.iter().map(|r| (r.r#type.as_str(), r.ticket, r.state.as_str(), r.satisfied)).collect();
+    assert_eq!(view, vec![("depends_on", b, "done", Some(true)), ("related_to", c, "todo", None)]);
+    assert_eq!(t.relations[0].title, "b");
+
+    // Seen from the other side: b is depended on, c is related (stored once, shown on both).
+    let rb = client.get_ticket(b).await.unwrap().relations;
+    assert_eq!((rb[0].r#type.as_str(), rb[0].ticket, rb[0].satisfied), ("blocks", a, None));
+    let rc = client.get_ticket(c).await.unwrap().relations;
+    assert_eq!((rc[0].r#type.as_str(), rc[0].ticket), ("related_to", a));
+    // The list leaves relations empty, like comments.
+    assert!(client.list_tickets(&Default::default()).await.unwrap().iter().all(|t| t.relations.is_empty()));
+
+    // related_to is removable from either side.
+    assert!(client.remove_relation(c, "related_to", a).await.unwrap().relations.is_empty());
+    assert!(client.get_ticket(a).await.unwrap().relations.iter().all(|r| r.r#type == "depends_on"));
+    assert!(client.remove_relation(a, "depends_on", b).await.unwrap().relations.is_empty());
+    match client.remove_relation(a, "depends_on", b).await {
+        Err(Error::Api { status: 404, .. }) => {}
+        other => panic!("expected 404, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn rejects_duplicate_self_and_cyclic_relations() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    let a = client.create_ticket(&new("a")).await.unwrap().id;
+    let b = client.create_ticket(&new("b")).await.unwrap().id;
+    let c = client.create_ticket(&new("c")).await.unwrap().id;
+
+    bad_request(client.add_relation(a, &relation("depends_on", a)).await, "itself");
+    bad_request(client.add_relation(a, &relation("blocks", b)).await, "invalid relation type");
+    bad_request(client.add_relation(a, &relation("depends_on", 9999)).await, "not found");
+
+    client.add_relation(a, &relation("depends_on", b)).await.unwrap();
+    bad_request(client.add_relation(a, &relation("depends_on", b)).await, "already exists");
+    client.add_relation(a, &relation("related_to", b)).await.unwrap();
+    bad_request(client.add_relation(b, &relation("related_to", a)).await, "already exists");
+
+    // b -> c, then c -> a would close a -> b -> c -> a.
+    client.add_relation(b, &relation("depends_on", c)).await.unwrap();
+    bad_request(client.add_relation(c, &relation("depends_on", a)).await, "cycle");
+    bad_request(client.add_relation(b, &relation("depends_on", a)).await, "cycle");
+    // The reverse direction as related_to is fine.
+    client.add_relation(c, &relation("related_to", a)).await.unwrap();
 }

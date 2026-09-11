@@ -101,6 +101,26 @@ test("adds and resolves a comment", async ({ page, server }) => {
   expect((await server.api(`/tickets/${t.id}`)).comments[0].resolved).toBe(true);
 });
 
+test("relates tickets and marks the blocked one", async ({ page, server }) => {
+  const dep = await create(server, "Dependency");
+  const t = await server.api("/tickets", { method: "POST", body: { title: "Needs it", state: "ready" } });
+  await page.goto(`/#/tickets/${t.id}`);
+  await page.selectOption("#relations select", "depends_on");
+  await page.fill("#relations input[name=ticket]", String(dep.id));
+  await page.click("#relations button:text-is('Add')");
+  const rel = page.locator("#relations .relation", { hasText: `#${dep.id} Dependency` });
+  await expect(rel).toHaveClass(/blocking/);
+  await expect(page.locator("#detail .blocked")).toHaveText(`blocked by #${dep.id}`);
+  await expect(card(page, t.id).locator(".blocked")).toBeVisible();
+  await rel.locator("a").click();
+  await expect(page.locator("#detail h2")).toContainText("Dependency");
+  await expect(page.locator("#relations h4")).toHaveText("Blocks");
+  await page.locator("#relations .relation button").click();
+  await expect(page.locator("#relations .relation")).toHaveCount(0);
+  expect((await server.api(`/tickets/${t.id}`)).relations).toEqual([]);
+  await expect(card(page, t.id).locator(".blocked")).toHaveCount(0);
+});
+
 test("reorders with Alt+ArrowDown and by dragging", async ({ page, server }) => {
   const a = await create(server, "First"), b = await create(server, "Second");
   await page.goto("/");

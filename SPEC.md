@@ -56,7 +56,7 @@ Transitions are not restricted by the orchestrator beyond the ACL. Prompts tell 
 - Each ticket has a `rank`, a float. Lower rank is served first.
 - New tickets get max rank plus one, so they join the back of the queue.
 - Reordering is relative: move a ticket before or after another. The orchestrator computes the new rank as the midpoint and renormalizes ranks when a gap gets too small. Clients never set the raw value.
-- Poll returns the available ticket with the lowest rank.
+- Poll returns the available, unblocked ticket with the lowest rank.
 
 ### 3.4 Access control
 
@@ -75,6 +75,21 @@ Transitions are not restricted by the orchestrator beyond the ACL. Prompts tell 
 - `id`, `title`, `description`, `state`, `rank`, `assignee`, `created_at`, `updated_at`
 - `links`: list of URLs such as pull requests, added by workers
 - `comments`
+- `relations`: see 3.7
+- `blocked`: a `ready` ticket with an unfinished dependency
+
+### 3.7 Relations
+
+Tickets relate to each other; `links` (URLs) is a separate concept.
+
+- `depends_on`: directed. The ticket cannot be worked until the other is finished, meaning `in_review` or `done`.
+- `related_to`: symmetric, informational. Stored once, shown on both tickets.
+
+A relation is refused when it duplicates an existing one, points at the ticket itself, or would make `depends_on` cyclic.
+
+A `ready` ticket with an unfinished dependency is blocked: poll never hands it out and the scheduler does not count it as available work. It stays `ready`; nothing changes its state. Only `ready` is blocked; a resumable `in_progress` ticket is handed out regardless.
+
+Ticket JSON lists each relation with the other ticket's id, title and state, as `depends_on`, `blocks` (the other ticket depends on this one) or `related_to`; `depends_on` carries `satisfied`.
 
 ## 4. Orchestrator
 
@@ -99,11 +114,13 @@ Tickets:
 - `GET /tickets/{id}/comments`
 - `POST /tickets/{id}/comments`
 - `POST /tickets/{id}/comments/{cid}/resolve`
+- `POST /tickets/{id}/relations`: body `{ type, ticket }` with `type` `depends_on` or `related_to`. Same ACL as `PATCH`.
+- `DELETE /tickets/{id}/relations/{type}/{ticket}`
 
 Workers:
 - `POST /workers/{id}/register`: worker confirms it is alive. The id and token were assigned by the orchestrator before start.
 - `POST /workers/{id}/heartbeat`
-- `POST /workers/{id}/poll`: returns the lowest-ranked available ticket for this worker's type, with the prompt for its current state and the project's repos, or nothing. Sets assignee atomically. An optional body `{"exclude": <ticket id>}` (the ticket the worker just timed out on) makes that ticket last in line: it is returned only when nothing else is available.
+- `POST /workers/{id}/poll`: returns the lowest-ranked available, unblocked ticket for this worker's type, with the prompt for its current state and the project's repos, or nothing. Sets assignee atomically. An optional body `{"exclude": <ticket id>}` (the ticket the worker just timed out on) makes that ticket last in line: it is returned only when nothing else is available.
 - `POST /workers/{id}/usage`: report token and cost usage for a ticket.
 - `GET /workers`: list workers and their status.
 
@@ -113,12 +130,12 @@ Metrics:
 ### 4.3 Scheduler
 
 Periodic loop:
-1. Count available tickets per worker type.
+1. Count available tickets per worker type: unassigned, in a workable state, not blocked (3.7).
 2. Count idle and busy workers per type.
 3. For each worker needed, create a worker record with an id and token, then ask the provider to start it. Start workers until each type has one worker per available ticket, capped by `max_workers` and by the provider's remaining capacity from `/status`.
 4. When a type has no available tickets, ask the provider to stop its idle workers.
 
-Later: dependencies between tickets and worker affinity.
+Later: worker affinity.
 
 ### 4.4 Reaper
 
@@ -128,7 +145,7 @@ There is no retry cap. A ticket that keeps killing workers is caught by humans w
 
 ### 4.5 Web UI
 
-Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order, shows one ticket with comments, allows creating, editing, reordering tickets and changing state, shows workers and metrics.
+Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments and relations, allows creating, editing, relating, reordering tickets and changing state, shows workers and metrics.
 
 Auth: the orchestrator injects the shared token into the page when serving it, and the UI sends it as a bearer header. Anyone who can load the page has the token, so the network decides who can use the UI.
 
@@ -182,7 +199,7 @@ Contains the worker binary, the `factory` CLI, git, the GitHub CLI, the agent CL
 
 ### 6.4 Factory skill
 
-A skill installed in the image, in the agent's skill location, that teaches the agent how to work with the orchestrator: read its ticket including comments, change state, add links, comment, create tickets, all through the `factory` CLI or the REST API directly. This is how human guidance left in comments reaches the agent.
+A skill installed in the image, in the agent's skill location, that teaches the agent how to work with the orchestrator: read its ticket including comments, change state, add links, relate tickets, comment, create tickets, all through the `factory` CLI or the REST API directly. This is how human guidance left in comments reaches the agent.
 
 ### 6.5 Forge
 
@@ -257,6 +274,7 @@ In:
 - Ticket states, assignee, ACL, comments.
 - Docker provider as a separate process.
 - Ticket ordering by rank with relative moves.
+- Ticket relations: `depends_on` blocks scheduling, `related_to` is informational.
 - Worker with Claude Code adapter. One worker type. Picks up `ready` and resumes `in_progress`. Opens a PR, moves to `in_review`. Loops until stopped.
 - Run timeout per worker type.
 - Factory skill in the worker image.
@@ -267,7 +285,7 @@ In:
 Out:
 - Multiple provider implementations, multiple worker types.
 - Agent-driven review, merge, release, deploy. Review is human.
-- Agent session refresh between tickets, affinity, ticket dependencies.
+- Agent session refresh between tickets, affinity.
 - Retry cap on failing tickets.
 - Forges other than GitHub.
 - Per-worker and per-worker-type metric breakdowns in the UI.
@@ -280,7 +298,6 @@ Out:
 - Retry cap: attempt counter that moves a ticket to `failed` after too many interrupted runs.
 - Other forges (GitLab, Gitea).
 - Worker affinity as a poll parameter.
-- Ticket dependencies and parallelism-aware scheduling.
 - Additional workable states: `todo` for refinement, `in_review` for agent review, and states for merge, release, deploy.
 - External tracker sync (GitHub Issues, Jira).
 - Usage normalization across agents. Whether workers report tokens or dollars.

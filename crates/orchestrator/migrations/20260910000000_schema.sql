@@ -40,3 +40,11 @@ CREATE TABLE usage (
     created_at  TEXT NOT NULL
 );
 CREATE INDEX usage_ticket ON usage(ticket_id);
+
+CREATE TABLE ticket_relations (
+    from_id INTEGER NOT NULL REFERENCES tickets(id),
+    type    TEXT NOT NULL,
+    to_id   INTEGER NOT NULL REFERENCES tickets(id),
+    UNIQUE (from_id, type, to_id)
+);
+CREATE INDEX ticket_relations_to ON ticket_relations(to_id);

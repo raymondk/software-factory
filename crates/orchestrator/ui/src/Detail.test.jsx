@@ -4,7 +4,7 @@ import { Ctx } from "./context.js";
 import { Detail } from "./Detail.jsx";
 
 const ticket = (over = {}) => ({ id: 1, title: "T", state: "todo", description: "", links: [], rank: 1, assignee: null,
-                                 created_at: "", updated_at: "", comments: [], ...over });
+                                 created_at: "", updated_at: "", comments: [], relations: [], blocked: false, ...over });
 const usage = { tokens_in: 0, tokens_out: 0, cost: 0 };
 const ctx = { refresh: vi.fn(), select: vi.fn(), showError: vi.fn() };
 const mount = t => render(<Ctx.Provider value={ctx}><Detail ticket={t} usage={usage} /></Ctx.Provider>);
@@ -37,4 +37,16 @@ test("resolved comments are hidden behind a toggle", () => {
   fireEvent.click(screen.getByText("Show 1 resolved"));
   expect(container.querySelector(".comment.resolved").hidden).toBe(false);
   expect(screen.getByText("Hide 1 resolved")).toBeTruthy();
+});
+
+test("relations are grouped and a blocked ticket names its blockers", () => {
+  const relations = [{ type: "depends_on", ticket: 2, title: "dep", state: "todo", satisfied: false },
+                     { type: "depends_on", ticket: 3, title: "done dep", state: "done", satisfied: true },
+                     { type: "blocks", ticket: 4, title: "later", state: "ready" },
+                     { type: "related_to", ticket: 5, title: "kin", state: "todo" }];
+  const { container } = mount(ticket({ state: "ready", relations, blocked: true }));
+  expect(container.querySelector(".blocked").textContent).toBe("blocked by #2");
+  expect([...container.querySelectorAll("#relations h4")].map(h => h.textContent)).toEqual(["Depends on", "Blocks", "Related to"]);
+  expect([...container.querySelectorAll(".relation.blocking a")].map(a => a.textContent)).toEqual(["#2 dep"]);
+  expect(container.querySelector(".relation a[href='#/tickets/5']").textContent).toBe("#5 kin");
 });

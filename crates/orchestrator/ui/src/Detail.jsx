@@ -40,6 +40,7 @@ export function Detail({ ticket: t, usage }) {
       <p>rank: {t.rank} · assignee: {t.assignee ?? "none"}</p>
       <p>created: {t.created_at} · updated: {t.updated_at}</p>
       <p>{usageLine(usage)}</p>
+      {t.blocked && <p class="blocked">blocked by {t.relations.filter(r => r.satisfied === false).map(r => `#${r.ticket}`).join(", ")}</p>}
       <p id="links">{t.links.map(l => isHttp(l) ? <a key={l} href={l} target="_blank" rel="noopener" title={l}>{l}</a> : <span key={l}>{l}</span>)}</p>
       <div id="actions">{(ACTIONS[t.state] ?? []).map(([label, state]) => <button key={label} onClick={action(state)}>{label}</button>)}</div>
       <form onSubmit={save}>
@@ -50,6 +51,7 @@ export function Detail({ ticket: t, usage }) {
         <textarea name="links" rows={3} placeholder="Links, one per line" value={values.links} onInput={set} />
         <div class="row"><span class="saved" hidden={!saved}>Saved</span><button class="primary">Save</button></div>
       </form>
+      <Relations ticket={t} />
       </div>
       <div class="comments">
         <h3>Comments</h3>
@@ -57,6 +59,51 @@ export function Detail({ ticket: t, usage }) {
         <CommentForm ticket={t} />
       </div>
     </div>
+  );
+}
+
+// Dependencies, dependents and related tickets; each opens that ticket. A `blocks` entry is the other ticket's
+// `depends_on`, so it is removed from that side.
+function Relations({ ticket: t }) {
+  const { refresh } = useApp();
+  const busy = useBusy();
+  const [kind, setKind] = useState("depends_on");
+  const [other, setOther] = useState("");
+  const add = busy(async e => {
+    e.preventDefault();
+    await api(`/tickets/${t.id}/relations`, { method: "POST", body: JSON.stringify({ type: kind, ticket: Number(other) }) });
+    setOther("");
+    await refresh();
+  });
+  const remove = r => busy(async () => {
+    const [id, type, ticket] = r.type === "blocks" ? [r.ticket, "depends_on", t.id] : [t.id, r.type, r.ticket];
+    await api(`/tickets/${id}/relations/${type}/${ticket}`, { method: "DELETE" });
+    await refresh();
+  });
+  const group = (label, type) => {
+    const rs = t.relations.filter(r => r.type === type);
+    return rs.length > 0 && <>
+      <h4>{label}</h4>
+      {rs.map(r => (
+        <div key={type + r.ticket} class={"relation" + (r.satisfied === false ? " blocking" : "")}>
+          <a href={`#/tickets/${r.ticket}`}>#{r.ticket} {r.title}</a><span class="tag">{r.state.replace("_", " ")}</span>
+          <button onClick={remove(r)} title="Remove relation">×</button>
+        </div>
+      ))}
+    </>;
+  };
+  return (
+    <section id="relations">
+      <h3>Relations</h3>
+      {group("Depends on", "depends_on")}{group("Blocks", "blocks")}{group("Related to", "related_to")}
+      <form onSubmit={add}>
+        <select value={kind} onChange={e => setKind(e.currentTarget.value)}>
+          <option value="depends_on">depends on</option><option value="related_to">related to</option>
+        </select>
+        <input name="ticket" type="number" min="1" placeholder="Ticket #" required value={other} onInput={e => setOther(e.currentTarget.value)} />
+        <button>Add</button>
+      </form>
+    </section>
   );
 }
 

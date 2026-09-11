@@ -16,6 +16,31 @@ pub struct Ticket {
     pub comments: Vec<Comment>,
     #[serde(default)]
     pub unresolved_comments: i64,
+    /// Relations with other tickets. Like `comments`, only `GET /tickets/{id}` fills this in.
+    #[serde(default)]
+    pub relations: Vec<Relation>,
+    /// A `ready` ticket with an unfinished dependency; never handed to a worker.
+    #[serde(default)]
+    pub blocked: bool,
+}
+
+/// A relation seen from one ticket. `type` is `depends_on` (this ticket waits for `ticket`), `blocks` (`ticket`
+/// waits for this one) or `related_to`. `satisfied` is set for `depends_on`: `ticket` is `in_review` or `done`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Relation {
+    pub r#type: String,
+    pub ticket: i64,
+    pub title: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub satisfied: Option<bool>,
+}
+
+/// `type` is `depends_on` or `related_to`; `ticket` is the other ticket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateRelation {
+    pub r#type: String,
+    pub ticket: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +271,17 @@ impl Client {
 
     pub async fn resolve_comment(&self, id: i64, cid: i64) -> Result<Comment, Error> {
         let r = self.http.post(format!("{}/tickets/{id}/comments/{cid}/resolve", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    /// Returns the ticket with its relations.
+    pub async fn add_relation(&self, id: i64, req: &CreateRelation) -> Result<Ticket, Error> {
+        let r = self.http.post(format!("{}/tickets/{id}/relations", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn remove_relation(&self, id: i64, kind: &str, ticket: i64) -> Result<Ticket, Error> {
+        let r = self.http.delete(format!("{}/tickets/{id}/relations/{kind}/{ticket}", self.base)).bearer_auth(&self.token);
         Self::send(r).await
     }
 

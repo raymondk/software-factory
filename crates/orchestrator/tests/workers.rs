@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use api_client::{Client, CreateComment, CreateTicket, CreateWorker, Error, MoveTicket, NewWorker, ReportUsage, Totals, UpdateTicket};
+use api_client::{Client, CreateComment, CreateRelation, CreateTicket, CreateWorker, Error, MoveTicket, NewWorker, ReportUsage, Totals, UpdateTicket};
 use tokio::sync::Barrier;
 
 mod common;
@@ -153,6 +153,37 @@ async fn poll_takes_lowest_ranked_available_for_type() {
     let p = rc.poll(&r.id, None).await.unwrap().expect("a ticket");
     assert_eq!((p.ticket.id, p.prompt.as_str()), (review, format!("Review #{review}").as_str()));
     assert!(rc.poll(&r.id, None).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn poll_skips_ready_tickets_with_unfinished_dependencies() {
+    let (url, _dir) = serve().await;
+    let human = Client::new(&url, TOKEN);
+    let (w, worker) = worker(&url, &human, "default").await;
+    let dep = ticket(&human, "dep", "todo").await;
+    let t = ticket(&human, "blocked", "ready").await;
+    human.add_relation(t, &CreateRelation { r#type: "depends_on".into(), ticket: dep }).await.unwrap();
+    assert!(human.get_ticket(t).await.unwrap().blocked);
+    assert!(human.list_tickets(&Default::default()).await.unwrap().iter().any(|x| x.id == t && x.blocked));
+
+    // The dependency is held by someone else, so the blocked ticket is the only candidate.
+    for state in ["todo", "ready", "in_progress", "failed"] {
+        human.update_ticket(dep, &UpdateTicket { state: Some(state.into()), assignee: Some(Some("w-other".into())), ..Default::default() }).await.unwrap();
+        assert!(worker.poll(&w.id, None).await.unwrap().is_none(), "dependency in {state} should block");
+    }
+    // A later, unblocked ticket is handed out ahead of the blocked one.
+    let free = ticket(&human, "free", "ready").await;
+    assert_eq!(worker.poll(&w.id, None).await.unwrap().unwrap().ticket.id, free);
+    human.update_ticket(free, &set_state("done")).await.unwrap();
+
+    human.update_ticket(dep, &set_state("in_review")).await.unwrap();
+    assert!(!human.get_ticket(t).await.unwrap().blocked);
+    let got = worker.poll(&w.id, None).await.unwrap().unwrap().ticket;
+    assert_eq!(got.id, t);
+    // Once in_progress, a dependency moving back does not stop the resume.
+    human.update_ticket(t, &UpdateTicket { state: Some("in_progress".into()), assignee: Some(None), ..Default::default() }).await.unwrap();
+    human.update_ticket(dep, &set_state("todo")).await.unwrap();
+    assert_eq!(worker.poll(&w.id, None).await.unwrap().unwrap().ticket.id, t);
 }
 
 #[tokio::test]

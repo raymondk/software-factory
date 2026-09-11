@@ -66,6 +66,7 @@ pre { white-space: pre-wrap; }
 .card.drop-before { border-top: 3px solid var(--icp-accent); }
 .card.drop-after { border-bottom: 3px solid var(--icp-accent); }
 .column.drop { outline: 1px dashed var(--icp-accent); outline-offset: -1px; }
+.blocked { color: var(--icp-accent); }
 .badge { font: 500 11px var(--mono); background: var(--icp-accent); color: #fff; border-radius: 9999px; padding: .1em .55em; }
 
 .pane > div > p { margin: .25rem 0; font: 12px var(--mono); color: var(--icp-fg-secondary); }
@@ -73,6 +74,11 @@ pre { white-space: pre-wrap; }
 #actions { display: flex; gap: .5rem; margin: .75rem 0 1rem; }
 #links:empty, #actions:empty { display: none; }
 summary { cursor: pointer; margin-bottom: .5rem; }
+#relations h4 { font: 500 11px var(--sans); letter-spacing: 0.18em; text-transform: uppercase; color: var(--icp-fg-secondary); margin: .75rem 0 .25rem; }
+.relation { display: flex; gap: .6rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--icp-rule); overflow-wrap: anywhere; }
+.relation.blocking a { color: var(--icp-accent-strong); font-weight: 500; }
+.relation button { margin-left: auto; font-size: 11px; padding: .1rem .5rem; }
+#relations form { grid-template-columns: auto minmax(0, 1fr) auto; margin-top: .75rem; }
 #workers tr[data-ticket] { cursor: pointer; }
 #workers tr[data-ticket]:hover { background: var(--icp-bg-sunk); }
 
