@@ -136,6 +136,22 @@ async fn starts_one_worker_per_ticket_up_to_max_workers() {
 }
 
 #[tokio::test]
+async fn blocked_tickets_do_not_start_workers() {
+    let (pool, config, provider, fake, _dir) = setup(10).await;
+    ticket(&pool, "ready", None).await; // id 1: blocked by 2
+    ticket(&pool, "todo", None).await; // id 2
+    sqlx::query("INSERT INTO ticket_relations (from_id, type, to_id) VALUES (1, 'depends_on', 2)").execute(&pool).await.unwrap();
+
+    scheduler::tick(&pool, &config, &provider).await.unwrap();
+    assert!(statuses(&pool).await.is_empty());
+    assert!(fake.lock().unwrap().starts.is_empty());
+
+    sqlx::query("UPDATE tickets SET state = 'done' WHERE id = 2").execute(&pool).await.unwrap();
+    scheduler::tick(&pool, &config, &provider).await.unwrap();
+    assert_eq!(statuses(&pool).await.len(), 1);
+}
+
+#[tokio::test]
 async fn provider_capacity_caps_starts() {
     let (pool, config, provider, fake, _dir) = setup(1).await;
     for _ in 0..3 {

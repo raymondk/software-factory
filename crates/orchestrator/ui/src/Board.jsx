@@ -38,6 +38,7 @@ export function Board({ tickets, selected }) {
       <div>#{t.id} {t.title}</div>
       <div class="meta">
         {t.assignee && <span>{t.assignee}</span>}
+        {t.blocked && <span class="tag blocked" title="Waiting on a dependency">blocked</span>}
         {t.links.filter(isHttp).map(href => <a key={href} href={href} target="_blank" rel="noopener" title={href} onClick={e => e.stopPropagation()}>↗</a>)}
         {t.unresolved_comments ? <span class="badge" title="unresolved comments">{t.unresolved_comments}</span> : null}
       </div>

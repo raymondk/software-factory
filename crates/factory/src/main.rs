@@ -1,4 +1,4 @@
-use api_client::{Breakdown, Client, Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, MoveTicket, ReportUsage, Totals, UpdateTicket};
+use api_client::{Breakdown, Client, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, MoveTicket, ReportUsage, Totals, UpdateTicket};
 use serde::Serialize;
 use clap::{Parser, Subcommand};
 
@@ -108,6 +108,22 @@ enum TicketCommand {
         #[arg(long, value_name = "ID")]
         after: Option<i64>,
     },
+    /// Relate a ticket to another: it depends on the other (worked only once that is in_review or done), or is related to it
+    Link {
+        id: i64,
+        #[arg(long, value_name = "ID", required_unless_present = "related_to")]
+        depends_on: Option<i64>,
+        #[arg(long, value_name = "ID")]
+        related_to: Option<i64>,
+    },
+    /// Remove a relation added with link
+    Unlink {
+        id: i64,
+        #[arg(long, value_name = "ID", required_unless_present = "related_to")]
+        depends_on: Option<i64>,
+        #[arg(long, value_name = "ID")]
+        related_to: Option<i64>,
+    },
     /// Add a comment to a ticket
     Comment {
         id: i64,
@@ -148,6 +164,24 @@ async fn main() -> anyhow::Result<()> {
                 print(&client.update_ticket(id, &UpdateTicket { title, description, state, assignee, links }).await?)
             }
             TicketCommand::Move { id, before, after } => print(&client.move_ticket(id, &MoveTicket { before, after }).await?),
+            TicketCommand::Link { id, depends_on, related_to } => {
+                let mut t = None;
+                for (kind, other) in [("depends_on", depends_on), ("related_to", related_to)] {
+                    if let Some(other) = other {
+                        t = Some(client.add_relation(id, &CreateRelation { r#type: kind.into(), ticket: other }).await?);
+                    }
+                }
+                print(&t)
+            }
+            TicketCommand::Unlink { id, depends_on, related_to } => {
+                let mut t = None;
+                for (kind, other) in [("depends_on", depends_on), ("related_to", related_to)] {
+                    if let Some(other) = other {
+                        t = Some(client.remove_relation(id, kind, other).await?);
+                    }
+                }
+                print(&t)
+            }
             TicketCommand::Comment { id, body } => print(&client.add_comment(id, &CreateComment { body }).await?),
             TicketCommand::Comments { id } => client.list_comments(id).await?.iter().for_each(print_comment),
             TicketCommand::Resolve { id, cid } => print(&client.resolve_comment(id, cid).await?),

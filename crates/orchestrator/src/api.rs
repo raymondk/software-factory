@@ -1,12 +1,12 @@
 use api_client::{
-    Breakdown, Comment, CreateComment, CreateTicket, CreateWorker, ListTickets, Metrics, MoveTicket, NewWorker, PollRequest, PollResponse, ReportUsage, Ticket, TicketKey, Totals,
-    UpdateTicket, Usage, Worker, WorkerKey, WorkerTypeKey,
+    Breakdown, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, Metrics, MoveTicket, NewWorker, PollRequest, PollResponse, Relation, ReportUsage,
+    Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, WorkerTypeKey,
 };
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Extension, Json, Router};
 use sqlx::{Connection, SqliteExecutor};
 
@@ -25,6 +25,8 @@ pub fn router(state: AppState) -> Router {
         .route("/tickets/{id}/move", post(move_ticket))
         .route("/tickets/{id}/comments", get(list_comments).post(add_comment))
         .route("/tickets/{id}/comments/{cid}/resolve", post(resolve_comment))
+        .route("/tickets/{id}/relations", post(add_relation))
+        .route("/tickets/{id}/relations/{kind}/{other}", delete(remove_relation))
         .route("/workers", get(list_workers).post(create_worker))
         .route("/workers/{id}/register", post(register))
         .route("/workers/{id}/heartbeat", post(heartbeat))
@@ -100,6 +102,8 @@ struct Row {
     links: String,
     #[sqlx(default)]
     unresolved_comments: i64,
+    #[sqlx(default)]
+    blocked: bool,
 }
 
 impl From<Row> for Ticket {
@@ -116,6 +120,8 @@ impl From<Row> for Ticket {
             links: serde_json::from_str(&r.links).unwrap_or_default(),
             comments: vec![],
             unresolved_comments: r.unresolved_comments,
+            relations: vec![],
+            blocked: r.blocked,
         }
     }
 }
@@ -140,6 +146,10 @@ const COLUMNS: &str = "id, title, description, state, rank, assignee, created_at
 const COLUMNS_WITH_COMMENTS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links, \
     (SELECT COUNT(*) FROM comments c WHERE c.ticket_id = tickets.id AND NOT c.resolved) AS unresolved_comments";
 const COMMENT_COLUMNS: &str = "id, ticket_id, author, body, created_at, resolved";
+/// Spec 3.7: a `ready` ticket with a dependency that is not yet `in_review` or `done`. Evaluated against `tickets`.
+pub const BLOCKED: &str = "(tickets.state = 'ready' AND EXISTS (SELECT 1 FROM ticket_relations r JOIN tickets d ON d.id = r.to_id \
+    WHERE r.from_id = tickets.id AND r.type = 'depends_on' AND d.state NOT IN ('in_review', 'done')))";
+const RELATION_TYPES: [&str; 2] = ["depends_on", "related_to"];
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTicket>) -> Result<(StatusCode, Json<Ticket>), ApiError> {
@@ -166,7 +176,7 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
 // The list leaves `comments` empty; only GET /tickets/{id} embeds the thread, to avoid a query per ticket.
 async fn list_tickets(State(state): State<AppState>, Query(filter): Query<ListTickets>) -> Result<Json<Vec<Ticket>>, ApiError> {
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {COLUMNS_WITH_COMMENTS} FROM tickets WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR assignee = ?2) \
+        "SELECT {COLUMNS_WITH_COMMENTS}, {BLOCKED} AS blocked FROM tickets WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR assignee = ?2) \
          ORDER BY rank ASC, id ASC"
     ))
     .bind(&filter.state)
@@ -177,13 +187,19 @@ async fn list_tickets(State(state): State<AppState>, Query(filter): Query<ListTi
 }
 
 async fn get_ticket(State(state): State<AppState>, Path(id): Path<i64>) -> Result<Json<Ticket>, ApiError> {
-    let row: Option<Row> = sqlx::query_as(&format!("SELECT {COLUMNS_WITH_COMMENTS} FROM tickets WHERE id = ?1"))
+    Ok(Json(full_ticket(&state, id).await?))
+}
+
+/// The ticket with its comments and relations.
+async fn full_ticket(state: &AppState, id: i64) -> Result<Ticket, ApiError> {
+    let row: Option<Row> = sqlx::query_as(&format!("SELECT {COLUMNS_WITH_COMMENTS}, {BLOCKED} AS blocked FROM tickets WHERE id = ?1"))
         .bind(id)
         .fetch_optional(&state.pool)
         .await?;
     let mut ticket: Ticket = row.ok_or(ApiError::NotFound)?.into();
-    ticket.comments = comments_of(&state, id).await?;
-    Ok(Json(ticket))
+    ticket.comments = comments_of(state, id).await?;
+    ticket.relations = relations_of(state, id).await?;
+    Ok(ticket)
 }
 
 async fn comments_of(state: &AppState, ticket_id: i64) -> Result<Vec<Comment>, ApiError> {
@@ -234,6 +250,101 @@ async fn resolve_comment(State(state): State<AppState>, Path((id, cid)): Path<(i
             .fetch_optional(&state.pool)
             .await?;
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
+}
+
+#[derive(sqlx::FromRow)]
+struct RelationRow {
+    r#type: String,
+    ticket: i64,
+    title: String,
+    state: String,
+    satisfied: Option<bool>,
+}
+
+/// Dependencies, dependents (as `blocks`) and related tickets, each with the other ticket's title and state.
+async fn relations_of(state: &AppState, id: i64) -> Result<Vec<Relation>, ApiError> {
+    let rows: Vec<RelationRow> = sqlx::query_as(
+        "SELECT 'depends_on' AS type, t.id AS ticket, t.title, t.state, t.state IN ('in_review', 'done') AS satisfied \
+         FROM ticket_relations r JOIN tickets t ON t.id = r.to_id WHERE r.from_id = ?1 AND r.type = 'depends_on' \
+         UNION ALL SELECT 'blocks', t.id, t.title, t.state, NULL \
+         FROM ticket_relations r JOIN tickets t ON t.id = r.from_id WHERE r.to_id = ?1 AND r.type = 'depends_on' \
+         UNION ALL SELECT 'related_to', t.id, t.title, t.state, NULL \
+         FROM ticket_relations r JOIN tickets t ON t.id = CASE WHEN r.from_id = ?1 THEN r.to_id ELSE r.from_id END \
+         WHERE r.type = 'related_to' AND ?1 IN (r.from_id, r.to_id) ORDER BY 1, 2",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| Relation { r#type: r.r#type, ticket: r.ticket, title: r.title, state: r.state, satisfied: r.satisfied }).collect())
+}
+
+/// Spec 3.7: refused when duplicate (either direction for `related_to`), self-referencing, or a `depends_on` cycle.
+async fn add_relation(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<i64>,
+    Json(req): Json<CreateRelation>,
+) -> Result<(StatusCode, Json<Ticket>), ApiError> {
+    if !RELATION_TYPES.contains(&req.r#type.as_str()) {
+        return Err(ApiError::BadRequest("invalid relation type"));
+    }
+    if req.ticket == id {
+        return Err(ApiError::BadRequest("a ticket cannot relate to itself"));
+    }
+    let mut conn = state.pool.acquire().await?;
+    // IMMEDIATE so two concurrent inserts cannot each pass the cycle check.
+    let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
+    authorize(&caller, &mut *tx, id).await?;
+    let other: Option<(i64,)> = sqlx::query_as("SELECT id FROM tickets WHERE id = ?1").bind(req.ticket).fetch_optional(&mut *tx).await?;
+    other.ok_or(ApiError::BadRequest("related ticket not found"))?;
+    let dup: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM ticket_relations WHERE type = ?3 AND (from_id = ?1 AND to_id = ?2 OR type = 'related_to' AND from_id = ?2 AND to_id = ?1)",
+    )
+    .bind(id)
+    .bind(req.ticket)
+    .bind(&req.r#type)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if dup.is_some() {
+        return Err(ApiError::BadRequest("relation already exists"));
+    }
+    if req.r#type == "depends_on" {
+        let cycle: Option<(i64,)> = sqlx::query_as(
+            "WITH RECURSIVE reach(id) AS (SELECT to_id FROM ticket_relations WHERE from_id = ?2 AND type = 'depends_on' \
+             UNION SELECT r.to_id FROM ticket_relations r JOIN reach ON r.from_id = reach.id WHERE r.type = 'depends_on') \
+             SELECT 1 FROM reach WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(req.ticket)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if cycle.is_some() {
+            return Err(ApiError::BadRequest("dependency would form a cycle"));
+        }
+    }
+    sqlx::query("INSERT INTO ticket_relations (from_id, type, to_id) VALUES (?1, ?2, ?3)").bind(id).bind(&req.r#type).bind(req.ticket).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(full_ticket(&state, id).await?)))
+}
+
+async fn remove_relation(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path((id, kind, other)): Path<(i64, String, i64)>,
+) -> Result<Json<Ticket>, ApiError> {
+    authorize(&caller, &state.pool, id).await?;
+    let deleted = sqlx::query(
+        "DELETE FROM ticket_relations WHERE type = ?3 AND (from_id = ?1 AND to_id = ?2 OR type = 'related_to' AND from_id = ?2 AND to_id = ?1)",
+    )
+    .bind(id)
+    .bind(other)
+    .bind(&kind)
+    .execute(&state.pool)
+    .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(Json(full_ticket(&state, id).await?))
 }
 
 /// Spec 3.4: a ticket may be modified by a human or by the worker holding it.
@@ -415,7 +526,7 @@ async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<C
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
 }
 
-/// Hands the worker the lowest-ranked unassigned ticket in a state its type has a prompt for. 204 when there is none.
+/// Hands the worker the lowest-ranked unassigned, unblocked ticket in a state its type has a prompt for. 204 when there is none.
 async fn poll(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -434,7 +545,8 @@ async fn poll(
     let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET assignee = ?1, updated_at = {NOW} WHERE id = \
-         (SELECT id FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?2)) ORDER BY id IS ?3, rank ASC, id ASC LIMIT 1) \
+         (SELECT id FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?2)) AND NOT {BLOCKED} \
+          ORDER BY id IS ?3, rank ASC, id ASC LIMIT 1) \
          RETURNING {COLUMNS}"
     ))
     .bind(&id)

@@ -1,4 +1,4 @@
-//! Spec 4.3: starts a worker per available ticket and stops idle ones when their type's queue is empty.
+//! Spec 4.3: starts a worker per available (unassigned, unblocked) ticket and stops idle ones when their type's queue is empty.
 
 use std::collections::BTreeMap;
 
@@ -17,8 +17,11 @@ pub async fn tick(pool: &SqlitePool, config: &Config, provider: &Provider) -> an
     let mut available = BTreeMap::new();
     for (name, wt) in &config.worker_types {
         let states = serde_json::to_string(&wt.prompts.keys().collect::<Vec<_>>()).unwrap();
-        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?1))")
-            .bind(states)
+        let (n,): (i64,) = sqlx::query_as(&format!(
+            "SELECT COUNT(*) FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?1)) AND NOT {}",
+            api::BLOCKED
+        ))
+        .bind(states)
             .fetch_one(pool)
             .await?;
         available.insert(name.as_str(), n as u32);

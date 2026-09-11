@@ -19,6 +19,7 @@ Other commands:
 - Question or blocker: `factory ticket comment $FACTORY_TICKET --body "..."`. Leave the ticket `in_progress` only if another run should resume it; otherwise move it.
 - Stuck: comment why, then `factory ticket edit $FACTORY_TICKET --state failed`
 - Follow-up work: `factory ticket create --title "..." --description "..."`
+- Relate tickets: `factory ticket link <id> --depends-on <id>` or `--related-to <id>`; undo with `factory ticket unlink`. A `ready` ticket that depends on another is not worked until that one is `in_review` or `done`.
 - Mark a comment handled: `factory ticket resolve $FACTORY_TICKET <comment-id>`
 
 States: `todo`, `ready`, `in_progress`, `in_review`, `failed`, `done`. Never leave your ticket `in_progress` unless resuming is intended: an unmoved ticket is marked `failed` when you exit.
