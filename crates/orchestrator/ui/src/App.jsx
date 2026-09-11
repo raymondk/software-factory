@@ -58,6 +58,15 @@ export function App() {
     return () => { clearInterval(i); document.removeEventListener("visibilitychange", tick); };
   }, [refresh]);
 
+  // The detail dialog follows the open ticket: shown while one is loaded, closed when the hash clears.
+  // Escape and a backdrop click close it natively; the close event then clears the hash.
+  const dialog = useRef();
+  useEffect(() => {
+    const d = dialog.current;
+    if (ticket && !d.open) d.showModal();
+    if (!ticket && d.open) d.close();
+  }, [ticket]);
+
   const usage = ticket && (metrics?.per_ticket.find(x => x.ticket_id === ticket.id) ?? { tokens_in: 0, tokens_out: 0, cost: 0 });
   return (
     <Ctx.Provider value={{ refresh, select, showError }}>
@@ -67,7 +76,9 @@ export function App() {
         <CreateDialog />
         <div id="board">{tickets ? <Board tickets={tickets} selected={selected} /> : <span id="loading">Loading…</span>}</div>
       </section>
-      <section id="detail">{ticket && <Detail key={ticket.id} ticket={ticket} usage={usage} />}</section>
+      <dialog id="detail" ref={dialog} onClose={() => location.hash && select(null)} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
+        {ticket && <Detail key={ticket.id} ticket={ticket} usage={usage} />}
+      </dialog>
       <Workers workers={workers} />
       <Metrics metrics={metrics} />
     </Ctx.Provider>

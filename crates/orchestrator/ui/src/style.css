@@ -9,8 +9,7 @@
 :root[data-theme="dark"] { --icp-bg: #14110d; --icp-bg-elev: #1c1813; --icp-bg-sunk: #1c1813; --icp-rule: #2d2820; --icp-fg: #f0ebe0; --icp-fg-secondary: #c9c2b4; --icp-fg-muted: #868078; --icp-accent: #c25a37; --icp-accent-strong: #d96a45; --icp-accent-dim: rgba(194, 90, 55, 0.15); }
 
 body { font: 14px/1.45 var(--sans); margin: 1.5rem; background: var(--icp-bg); color: var(--icp-fg); }
-#app { display: grid; grid-template-columns: 3fr minmax(16rem, 1fr); gap: 1.5rem; }
-h1 { grid-column: 1 / -1; margin: 0; font: 500 26px var(--serif); letter-spacing: -0.015em; }
+h1 { margin: 0 0 1rem; font: 500 26px var(--serif); letter-spacing: -0.015em; }
 h2 { font: 500 20px var(--serif); letter-spacing: -0.015em; margin: 0 0 .5rem; }
 h3 { font: 500 16px var(--serif); margin: 1rem 0 .5rem; }
 a { color: var(--icp-accent); }
@@ -27,7 +26,7 @@ input, textarea, select { font: inherit; padding: .4rem .5rem; border: 1px solid
 :focus-visible { outline: 2px solid var(--icp-accent); outline-offset: 1px; }
 
 #error, .error { display: flex; gap: .5rem; align-items: center; padding: .5rem .75rem; background: var(--icp-accent-dim); color: var(--icp-accent-strong); border-left: 3px solid var(--icp-accent); }
-#error { grid-column: 1 / -1; }
+#error { margin-bottom: 1rem; }
 #error:empty { display: none; }
 #error button { margin-left: auto; border: 0; color: inherit; padding: 0 .4rem; }
 table { border-collapse: collapse; width: 100%; }
@@ -35,14 +34,17 @@ td, th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--
 #metrics td:not(:first-child), #workers td:first-child, #workers td:nth-child(4), #totals { font: 13px var(--mono); }
 form { display: grid; gap: .5rem; margin-bottom: 1rem; }
 #toolbar { margin-bottom: 1rem; }
-dialog { width: min(32rem, 90vw); padding: 1.25rem 1.5rem; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); }
+dialog { width: min(32rem, 92vw); max-height: 90vh; padding: 0; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); }
+dialog > *, .pane { padding: 1.25rem 1.5rem; }
+dialog > h2 { padding-bottom: 0; }
+#detail { width: min(44rem, 92vw); }
 dialog::backdrop { background: rgba(26, 26, 26, .45); }
 dialog h2 { display: flex; gap: .5rem; align-items: center; }
 dialog h2 button { margin-left: auto; }
 dialog form { margin-bottom: 0; }
 pre { white-space: pre-wrap; }
 
-#board { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .5rem; }
+#board { display: grid; margin-bottom: 1.5rem; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .5rem; }
 #loading { color: var(--icp-fg-muted); }
 .column h3 { margin: 0 0 .5rem; padding: .4rem 0; border-top: 3px solid var(--icp-rule); }
 .column.in_progress h3 { border-color: var(--icp-indicator-teal); }
@@ -60,14 +62,10 @@ pre { white-space: pre-wrap; }
 .column.drop { outline: 1px dashed var(--icp-accent); outline-offset: -1px; }
 .badge { font: 500 11px var(--mono); background: var(--icp-accent); color: #fff; border-radius: 9999px; padding: .1em .55em; }
 
-#detail:empty::before { content: "Select a ticket."; color: var(--icp-fg-muted); }
-#detail h2 { display: flex; gap: .5rem; align-items: center; }
-#detail h2 button { margin-left: auto; }
-#detail > p { margin: .25rem 0; font: 12px var(--mono); color: var(--icp-fg-secondary); }
+.pane > p { margin: .25rem 0; font: 12px var(--mono); color: var(--icp-fg-secondary); }
 #links { display: grid; gap: .2rem; overflow-wrap: anywhere; }
 #actions { display: flex; gap: .5rem; margin: .75rem 0 1rem; }
 #links:empty, #actions:empty { display: none; }
-#workers-section, #metrics-section { grid-column: 1 / -1; }
 summary { cursor: pointer; margin-bottom: .5rem; }
 #workers tr[data-ticket] { cursor: pointer; }
 #workers tr[data-ticket]:hover { background: var(--icp-bg-sunk); }

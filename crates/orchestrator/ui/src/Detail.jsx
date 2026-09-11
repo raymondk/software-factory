@@ -27,7 +27,7 @@ export function Detail({ ticket: t, usage }) {
   const action = state => busy(async () => { await patch(t.id, { state }); await refresh(); });
 
   return (
-    <>
+    <div class="pane">
       <h2><span>#{t.id} {t.title}</span><button onClick={() => select(null)}>Close</button></h2>
       <p>rank: {t.rank} · assignee: {t.assignee ?? "none"}</p>
       <p>created: {t.created_at} · updated: {t.updated_at}</p>
@@ -45,7 +45,7 @@ export function Detail({ ticket: t, usage }) {
       <h3>Comments</h3>
       <Thread ticket={t} />
       <CommentForm ticket={t} />
-    </>
+    </div>
   );
 }
 

@@ -42,15 +42,17 @@ const ids = async (server, ...want) => (await server.api("/tickets")).map(t => t
 test("creates a ticket from the dialog", async ({ page }) => {
   await page.goto("/");
   await page.click("button:text-is('New ticket')");
-  await expect(page.locator("dialog")).toBeVisible();
+  await expect(page.locator("#create")).toBeVisible();
   await page.fill("#create input[name=title]", "Created in browser");
   await page.click("#create button:text-is('Create ticket')");
-  await expect(page.locator("dialog")).toBeHidden();
+  await expect(page.locator("#create")).toBeHidden();
   await expect(page.locator(".column.todo .card", { hasText: "Created in browser" })).toBeVisible();
   await expect(page).toHaveURL(/#\/tickets\/\d+$/);
+  await expect(page.locator("#detail")).toBeVisible();
+  await page.keyboard.press("Escape"); // closes the ticket that just opened
   await page.click("button:text-is('New ticket')");
   await page.keyboard.press("Escape");
-  await expect(page.locator("dialog")).toBeHidden();
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
 });
 
 test("opens a ticket by card click and by URL", async ({ page, server }) => {
@@ -63,7 +65,12 @@ test("opens a ticket by card click and by URL", async ({ page, server }) => {
   await page.goto(`/#/tickets/${t.id}`);
   await expect(page.locator("#detail h2")).toContainText("Open me");
   await page.click("#detail h2 button");
-  await expect(page.locator("#detail")).toBeEmpty();
+  await expect(page.locator("#detail")).toBeHidden();
+  await expect(page).toHaveURL(/\/#?$/);
+  await page.goBack();
+  await expect(page.locator("#detail h2")).toContainText("Open me");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#detail")).toBeHidden();
 });
 
 test("edits title and state from the form and the Mark ready action", async ({ page, server }) => {
