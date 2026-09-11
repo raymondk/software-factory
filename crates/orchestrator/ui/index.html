@@ -21,8 +21,10 @@
   .card:hover { background: #f4f4f4; }
   .card.selected { border-color: #5b9bd5; background: #eef4fb; }
   .meta { display: flex; gap: .4rem; align-items: center; margin-top: .3rem; color: #666; font-size: .85em; }
-  .meta button { padding: 0 .3rem; margin-left: auto; }
-  .meta button + button { margin-left: 0; }
+  .card.dragging { opacity: .5; }
+  .card.drop-before { border-top: 3px solid #5b9bd5; }
+  .card.drop-after { border-bottom: 3px solid #5b9bd5; }
+  .column.drop { outline: 2px dashed #5b9bd5; outline-offset: -2px; }
   .badge { background: #d9534f; color: #fff; border-radius: 1em; padding: 0 .5em; }
   .meta a { text-decoration: none; }
   #links { display: grid; gap: .2rem; overflow-wrap: anywhere; }
@@ -131,17 +133,36 @@
     return select;
   };
 
+  let dragging = null, over = null; // ticket being dragged (the board does not re-render meanwhile) and the marked drop target
+  const mark = (node, cls) => { over?.classList.remove("drop-before", "drop-after", "drop"); over = node; node?.classList.add(cls); };
+  const upper = (e, c) => { const r = c.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; };
+  const drop = (e, state, rel) => { e.preventDefault(); const t = dragging; dragging = null; mark(null); if (t) move(t, state, rel); };
+  // Changes state if needed, then rank; the board re-renders either way, so a failed call snaps it back.
+  async function move(t, state, rel) {
+    try {
+      if (state !== t.state) await api("/tickets/" + t.id, { method: "PATCH", body: JSON.stringify({ state }) });
+      if (rel) await api("/tickets/" + t.id + "/move", { method: "POST", body: JSON.stringify(rel) });
+    } catch (e) { showError(e.message); }
+    await list().catch(e => showError(e.message));
+  }
+
   async function list() {
+    if (dragging) return;
     const tickets = await api("/tickets");
+    const focused = document.activeElement?.closest(".card")?.dataset.id;
     document.getElementById("board").replaceChildren(...STATES.map(s => {
       const col = el("section");
       col.className = "column " + s;
       const cards = tickets.filter(t => t.state === s);
       col.append(el("h3", `${s} (${cards.length})`));
       cards.forEach((t, i) => col.append(card(t, cards[i - 1], cards[i + 1])));
+      col.ondragover = e => { e.preventDefault(); mark(col, "drop"); };
+      col.ondragleave = e => col.contains(e.relatedTarget) || mark(null);
+      col.ondrop = e => { const last = cards.filter(t => t.id !== dragging?.id).at(-1); drop(e, s, last && { after: last.id }); };
       return col;
     }));
     highlight();
+    if (focused) document.querySelector(`.card[data-id="${focused}"]`)?.focus();
   }
   const highlight = () => { for (const c of document.querySelectorAll(".card")) c.classList.toggle("selected", Number(c.dataset.id) === selected); };
 
@@ -149,6 +170,17 @@
     const c = el("div");
     c.className = "card";
     c.dataset.id = t.id;
+    c.draggable = true;
+    c.tabIndex = 0;
+    c.ondragstart = e => { dragging = t; e.dataTransfer.setData("text/plain", t.id); c.classList.add("dragging"); };
+    c.ondragend = () => { dragging = null; mark(null); c.classList.remove("dragging"); };
+    c.ondragover = e => { e.preventDefault(); e.stopPropagation(); mark(c, upper(e, c) ? "drop-before" : "drop-after"); };
+    c.ondrop = e => { e.stopPropagation(); if (dragging?.id !== t.id) drop(e, t.state, upper(e, c) ? { before: t.id } : { after: t.id }); };
+    c.onkeydown = e => {
+      if (e.key === "Enter") return select(t.id);
+      const rel = e.altKey && (e.key === "ArrowUp" ? prev && { before: prev.id } : e.key === "ArrowDown" && next && { after: next.id });
+      if (rel) { e.preventDefault(); move(t, t.state, rel); }
+    };
     const meta = el("div");
     meta.className = "meta";
     if (t.assignee) meta.append(el("span", t.assignee));
@@ -159,8 +191,6 @@
       b.title = "unresolved comments";
       meta.append(b);
     }
-    meta.append(moveButton("↑", prev && { before: prev.id }, t.id),
-                moveButton("↓", next && { after: next.id }, t.id));
     c.append(el("div", `#${t.id} ${t.title}`), meta);
     c.onclick = () => select(t.id === selected ? null : t.id);
     return c;
@@ -189,17 +219,6 @@
       return tr;
     }));
     return m;
-  }
-
-  function moveButton(label, body, id) {
-    const b = el("button", label);
-    b.disabled = !body;
-    b.onclick = busy(async e => {
-      e.stopPropagation();
-      await api("/tickets/" + id + "/move", { method: "POST", body: JSON.stringify(body) });
-      await list();
-    });
-    return b;
   }
 
   let selected = null, pane = null; // the open ticket id and its pane (rebuilt only when another ticket is opened)
