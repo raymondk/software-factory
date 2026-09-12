@@ -224,7 +224,7 @@ wait
     assert_eq!(t.comments.len(), 1);
     let first_run = t.runs.last().unwrap().id; // newest first
     assert_eq!(t.comments[0].author, wid);
-    assert_eq!(t.comments[0].body, format!("Run timed out after 1s; leaving in_progress for another worker. Log: {}/#/tickets/{id}/runs/{first_run}", f.url));
+    assert_eq!(t.comments[0].body, format!("Run timed out after 1s; leaving in_progress for another worker. Log: [run {first_run}](#/tickets/{id}/runs/{first_run})"));
     assert_eq!(t.runs.len(), 2);
     assert!(t.runs.iter().all(|r| r.ended_at.is_some()));
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -269,7 +269,7 @@ async fn left_in_progress_is_failed() {
     assert_eq!(t.comments[0].author, wid);
     assert_eq!(
         t.comments[0].body,
-        format!("Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 3). Log: {}/#/tickets/{id}/runs/{}", f.url, t.runs[0].id)
+        format!("Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 3). Log: [run {run}](#/tickets/{id}/runs/{run})", run = t.runs[0].id)
     );
     stop(child).await;
 }
@@ -285,7 +285,7 @@ async fn left_in_progress_without_explicit_assignee_is_failed() {
     assert_eq!(t.comments[0].author, wid);
     assert_eq!(
         t.comments[0].body,
-        format!("Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 0). Log: {}/#/tickets/{id}/runs/{}", f.url, t.runs[0].id)
+        format!("Agent finished without moving the ticket out of in_progress; marking it failed (agent exited with exit status: 0). Log: [run {run}](#/tickets/{id}/runs/{run})", run = t.runs[0].id)
     );
     stop(child).await;
 }

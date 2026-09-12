@@ -199,15 +199,16 @@ impl Worker {
         // The usage report ends the run on the orchestrator; lines from here on belong to no run.
         self.call("report usage", || self.client.report_usage(&self.id, &report)).await?;
         self.log.set_run(None);
-        let log_url = format!("{}/#/tickets/{ticket}/runs/{}", self.url, job.run);
+        // Relative to the UI, so it works from whatever address a browser opens the UI at.
+        let log_link = format!("[run {run}](#/tickets/{ticket}/runs/{run})", run = job.run);
         // A state change by the agent releases the ticket; one still held is one the agent never moved.
         let current = self.call("get ticket", || self.client.get_ticket(ticket)).await?;
         let held = current.assignee.as_deref() == Some(&self.id);
         let (comment, patch) = if outcome.timed_out {
-            let body = format!("Run timed out after {}; leaving {} for another worker. Log: {log_url}", humantime::format_duration(job.run_timeout), current.state);
+            let body = format!("Run timed out after {}; leaving {} for another worker. Log: {log_link}", humantime::format_duration(job.run_timeout), current.state);
             (Some(body), held.then(|| UpdateTicket { assignee: Some(None), ..Default::default() }))
         } else if held {
-            let body = format!("Agent finished without moving the ticket out of {}; marking it failed ({}). Log: {log_url}", current.state, outcome.summary);
+            let body = format!("Agent finished without moving the ticket out of {}; marking it failed ({}). Log: {log_link}", current.state, outcome.summary);
             (Some(body), Some(UpdateTicket { state: Some("failed".into()), ..Default::default() }))
         } else {
             (None, None)

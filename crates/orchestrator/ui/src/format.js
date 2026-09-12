@@ -15,13 +15,14 @@ export const ago = (iso, now = Date.now()) => {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
 
-// Minimal markdown: escape first, then fenced code, paragraphs, lists, inline code, http(s) links.
+// Minimal markdown: escape first, then fenced code, paragraphs, lists, inline code, http(s) links. `[text](#/...)`
+// links into this UI open in the same tab; external ones in a new tab.
 const esc = s => s.replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
-const link = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
+const link = (href, text) => href.startsWith("#") ? `<a href="${href}">${text}</a>` : `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
 const inline = s => {
   const codes = [];
   return s.replace(/`([^`\n]+)`/g, (_, c) => `\0${codes.push(`<code>${c}</code>`) - 1}\0`)
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<]+?(?=[.,;:!?)]*(?:\s|$))/g,
+    .replace(/\[([^\]\n]+)\]\(((?:https?:\/\/|#\/)[^\s)]+)\)|https?:\/\/[^\s<]+?(?=[.,;:!?)]*(?:\s|$))/g,
              (m, text, href) => link(href ?? m, text ?? m))
     .replace(/\0(\d+)\0/g, (_, i) => codes[i]);
 };

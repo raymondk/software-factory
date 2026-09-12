@@ -8,6 +8,7 @@ describe("markdown", () => {
   test("renders lists, inline code and links", () => {
     expect(markdown("- one `x`\n- [two](https://t.io/a)")).toBe('<ul><li>one <code>x</code></li><li><a href="https://t.io/a" target="_blank" rel="noopener">two</a></li></ul>');
     expect(markdown("see https://t.io/a.")).toBe('<p>see <a href="https://t.io/a" target="_blank" rel="noopener">https://t.io/a</a>.</p>');
+    expect(markdown("Log: [run 3](#/tickets/5/runs/3)")).toBe('<p>Log: <a href="#/tickets/5/runs/3">run 3</a></p>');
   });
   test("keeps fenced code verbatim", () => {
     expect(markdown("```js\n- not a list\n\nx\n```")).toBe("<pre><code>- not a list\n\nx</code></pre>");
