@@ -13,5 +13,5 @@ Status: design in `SPEC.md`, broken into GitHub issues. Implementation in progre
 
 ### Issue tracker
 
-GitHub Issues on `raymondk/software-factory-2` via `gh-axi`. See `docs/agents/issue-tracker.md`.
+GitHub Issues on `raymondk/software-factory` via `gh-axi`. See `docs/agents/issue-tracker.md`.
 

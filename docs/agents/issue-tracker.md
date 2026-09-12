@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and specs live as GitHub issues on `raymondk/software-factory-2`. Use `gh-axi` (wrapper around `gh`) for all operations; it infers the repo from the clone.
+Issues and specs live as GitHub issues on `raymondk/software-factory`. Use `gh-axi` (wrapper around `gh`) for all operations; it infers the repo from the clone.
 
 ## Conventions
 
