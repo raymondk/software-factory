@@ -203,8 +203,22 @@ async fn full_ticket(state: &AppState, id: i64) -> Result<Ticket, ApiError> {
     ticket.comments = comments_of(state, id).await?;
     ticket.relations = relations_of(state, id).await?;
     let runs: Vec<RunRow> =
-        sqlx::query_as(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE ticket_id = ?1 ORDER BY id DESC")).bind(id).fetch_all(&state.pool).await?;
-    ticket.runs = runs.into_iter().map(Run::from).collect();
+        sqlx::query_as(&format!("SELECT {RUN_COLUMNS} FROM runs r JOIN workers w ON w.id = r.worker_id WHERE r.ticket_id = ?1 ORDER BY r.id DESC"))
+            .bind(id)
+            .fetch_all(&state.pool)
+            .await?;
+    // The agent comes from the worker type's config, so the UI can pick a log renderer; null once the type is gone from config.
+    ticket.runs = runs
+        .into_iter()
+        .map(|r| Run {
+            agent: state.config.worker_types.get(&r.worker_type).map(|wt| wt.agent.clone()),
+            id: r.id,
+            ticket_id: r.ticket_id,
+            worker_id: r.worker_id,
+            started_at: r.started_at,
+            ended_at: r.ended_at,
+        })
+        .collect();
     Ok(ticket)
 }
 
@@ -213,17 +227,12 @@ struct RunRow {
     id: i64,
     ticket_id: i64,
     worker_id: String,
+    worker_type: String,
     started_at: String,
     ended_at: Option<String>,
 }
 
-impl From<RunRow> for Run {
-    fn from(r: RunRow) -> Run {
-        Run { id: r.id, ticket_id: r.ticket_id, worker_id: r.worker_id, started_at: r.started_at, ended_at: r.ended_at }
-    }
-}
-
-const RUN_COLUMNS: &str = "id, ticket_id, worker_id, started_at, ended_at";
+const RUN_COLUMNS: &str = "r.id, r.ticket_id, r.worker_id, w.worker_type, r.started_at, r.ended_at";
 
 async fn comments_of(state: &AppState, ticket_id: i64) -> Result<Vec<Comment>, ApiError> {
     let rows: Vec<CommentRow> =

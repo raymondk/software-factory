@@ -103,3 +103,20 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .notice { padding: .5rem .75rem; background: var(--icp-bg-sunk); border-left: 3px solid var(--icp-fg-muted); color: var(--icp-fg-secondary); }
 .notice button { margin-left: .5rem; }
 .body.collapsed { max-height: 12em; overflow: hidden; mask-image: linear-gradient(#000 60%, transparent); }
+
+/* Pretty run log: events as blocks, raw lines kept in place. */
+.log-view { padding: .15rem .6rem; font-size: 11px; }
+.log.pretty { white-space: normal; font: 13px/1.45 var(--sans); }
+.log.pretty .raw { white-space: pre-wrap; font: 12px/1.45 var(--mono); color: var(--icp-fg-muted); }
+.ev { margin: .35rem 0; }
+.ev summary { margin-bottom: 0; }
+.ev pre { margin: .25rem 0 0 .75rem; padding: .4rem .6rem; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--icp-bg-elev); border-left: 2px solid var(--icp-rule); max-height: 24rem; overflow: auto; }
+.ev.tool summary { color: var(--icp-section-blue); }
+.ev.tool pre { border-left-color: var(--icp-section-blue); }
+.ev.thinking { opacity: .6; }
+.ev.result pre { border-left-color: var(--icp-indicator-teal); }
+.ev.error summary { color: var(--icp-accent); }
+.ev.error pre { border-left-color: var(--icp-accent); }
+.ev.text p { margin: .25rem 0; }
+.ev.final { margin-top: .75rem; padding-top: .5rem; border-top: 1px solid var(--icp-rule); color: var(--icp-fg-secondary); }
+.ev.final.error { color: var(--icp-accent); }

@@ -53,6 +53,8 @@ pub struct Run {
     pub id: i64,
     pub ticket_id: i64,
     pub worker_id: String,
+    /// The agent the worker's type runs, from orchestrator config; null once the type is no longer configured.
+    pub agent: Option<String>,
     pub started_at: String,
     pub ended_at: Option<String>,
 }

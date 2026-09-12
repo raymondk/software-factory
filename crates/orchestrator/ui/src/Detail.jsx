@@ -121,7 +121,7 @@ function Runs({ ticket: t, run }) {
           <span title={r.started_at}>{ago(r.started_at)}</span><span class="tag">{r.ended_at ? "ended" : "running"}</span>
         </div>
       ))}
-      {open && <LogPane path={`/runs/${open.id}/logs`} live={!open.ended_at} />}
+      {open && <LogPane path={`/runs/${open.id}/logs`} live={!open.ended_at} agent={open.agent} />}
     </section>
   );
 }

@@ -149,7 +149,7 @@ There is no retry cap. A ticket that keeps killing workers is caught by humans w
 
 ### 4.5 Web UI
 
-Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments, relations and runs, allows creating, editing, relating, reordering tickets and changing state, shows workers and metrics. A run's log opens from the ticket at `#/tickets/{id}/runs/{run}` and a worker's at `#/workers/{id}`, both following live while open.
+Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments, relations and runs, allows creating, editing, relating, reordering tickets and changing state, shows workers and metrics. A run's log opens from the ticket at `#/tickets/{id}/runs/{run}` and a worker's at `#/workers/{id}`, both following live while open. When the UI knows the run's agent (Claude Code today), the run's log opens in a pretty view that renders every event as structure, with a toggle to the raw lines; lines that are not events stay raw in place. The mapping from agent to renderer lives in the UI.
 
 Auth: the orchestrator injects the shared token into the page when serving it, and the UI sends it as a bearer header. Anyone who can load the page has the token, so the network decides who can use the UI.
 
@@ -161,7 +161,7 @@ Auth: the orchestrator injects the shared token into the page when serving it, a
 
 ### 4.7 Runs and logs
 
-A **run** is one hand-out of a ticket to a worker: opened by poll, ended by the worker's usage report or by the reaper. A ticket lists its runs.
+A **run** is one hand-out of a ticket to a worker: opened by poll, ended by the worker's usage report or by the reaper. A ticket lists its runs, each with the `agent` of its worker's type from config (null once the type is gone from config).
 
 A worker ships every line it prints and every line its agent prints to the orchestrator, tagged with the current run or with none (startup, polling, a crash before the first poll). Lines are raw text, truncated at 16 KiB, sent in batches every second or every 100 lines, whichever comes first, so a crash loses at most one batch. Interval, batch size and line limit are worker configuration (`FACTORY_LOG_INTERVAL`, `FACTORY_LOG_BATCH`, `FACTORY_LOG_MAX_LINE`). The orchestrator keeps everything; nothing is purged yet.
 
