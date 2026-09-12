@@ -63,5 +63,6 @@ test("runs are listed newest first and the selected one shows its log", () => {
   expect(container.querySelector(".log")).toBeTruthy();
   cleanup(); // two mounted dialogs would both carry id="runs"
   const empty = render(<Ctx.Provider value={ctx}><Detail ticket={ticket()} usage={usage} run={null} /></Ctx.Provider>).container;
-  expect(empty.querySelector("section#runs").hidden).toBe(true);
+  expect(empty.querySelector("section#runs .empty").textContent).toBe("No runs yet");
+  expect(empty.querySelector(".log")).toBe(null);
 });

@@ -53,13 +53,13 @@ export function Detail({ ticket: t, usage, run }) {
         <div class="row"><span class="saved" hidden={!saved}>Saved</span><button class="primary">Save</button></div>
       </form>
       <Relations ticket={t} />
-      <Runs ticket={t} run={run} />
-      </div>
       <div class="comments">
         <h3>Comments</h3>
         <Thread ticket={t} />
         <CommentForm ticket={t} />
       </div>
+      </div>
+      <Runs ticket={t} run={run} />
     </div>
   );
 }
@@ -109,19 +109,23 @@ function Relations({ ticket: t }) {
   );
 }
 
-// Runs newest first; the one in the URL shows its log, following live while the run is open.
+// Runs newest first; the one in the URL is highlighted and shows its log, following live while the run is open.
+// Closing the log goes back to the ticket's own URL.
 function Runs({ ticket: t, run }) {
+  const { select } = useApp();
   const open = t.runs.find(r => r.id === run);
   return (
-    <section id="runs" hidden={t.runs.length === 0}>
+    <section id="runs">
       <h3>Runs</h3>
+      {t.runs.length === 0 && <p class="empty">No runs yet</p>}
       {t.runs.map(r => (
         <div key={r.id} class={"run" + (r.id === run ? " selected" : "")}>
           <a href={`#/tickets/${t.id}/runs/${r.id}`}>run {r.id}</a><span>{r.worker_id}</span>
           <span title={r.started_at}>{ago(r.started_at)}</span><span class="tag">{r.ended_at ? "ended" : "running"}</span>
         </div>
       ))}
-      {open && <LogPane path={`/runs/${open.id}/logs`} live={!open.ended_at} agent={open.agent} />}
+      {open && <LogPane path={`/runs/${open.id}/logs`} live={!open.ended_at} agent={open.agent}
+                        title={`run ${open.id} · ${open.worker_id}`} onClose={() => select(t.id)} />}
     </section>
   );
 }

@@ -7,8 +7,8 @@ const RENDERERS = { "claude-code": claudeCode };
 
 // Monospace scrolling pane fed by `path?after=<line id>`. Polls every second while `live`, once more when it stops.
 // Sticks to the bottom unless the reader has scrolled up. With an `agent` the UI knows, it opens in the pretty view
-// with a toggle to raw.
-export function LogPane({ path, live, agent }) {
+// with a toggle to raw. A header row shows `title`, the toggle and a Close button (`onClose`) when any is given.
+export function LogPane({ path, live, agent, title, onClose }) {
   const render = RENDERERS[agent];
   const [pretty, setPretty] = useState(true);
   const [lines, setLines] = useState([]);
@@ -44,7 +44,13 @@ export function LogPane({ path, live, agent }) {
   const show = render && pretty ? l => render(l.line) ?? <div class="raw">{l.line}</div> : l => <div class="raw">{l.line}</div>;
   return (
     <>
-      {render && <div class="row"><button class="log-view" onClick={() => setPretty(!pretty)}>{pretty ? "Raw" : "Pretty"}</button></div>}
+      {(render || title || onClose) && (
+        <div class="log-head">
+          {title && <span>{title}</span>}
+          {render && <button class="log-view" onClick={() => setPretty(!pretty)}>{pretty ? "Raw" : "Pretty"}</button>}
+          {onClose && <button class="log-view" onClick={onClose}>Close</button>}
+        </div>
+      )}
       <pre class={"log" + (render && pretty ? " pretty" : "")} ref={pre} onScroll={onScroll}>{lines.map(l => <div key={l.id} class="line">{show(l)}</div>)}</pre>
     </>
   );
