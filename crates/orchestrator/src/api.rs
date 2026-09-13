@@ -488,9 +488,11 @@ struct WorkerRow {
     ticket: Option<i64>,
 }
 
-impl From<WorkerRow> for Worker {
-    fn from(r: WorkerRow) -> Worker {
-        Worker { id: r.id, worker_type: r.worker_type, status: r.status, created_at: r.created_at, last_heartbeat: r.last_heartbeat, ticket: r.ticket }
+impl WorkerRow {
+    /// The agent comes from the worker type's config, so the UI can pick a log renderer; null once the type is gone from config.
+    fn into_worker(self, config: &Config) -> Worker {
+        let agent = config.worker_types.get(&self.worker_type).map(|wt| wt.agent.clone());
+        Worker { id: self.id, worker_type: self.worker_type, agent, status: self.status, created_at: self.created_at, last_heartbeat: self.last_heartbeat, ticket: self.ticket }
     }
 }
 
@@ -528,12 +530,12 @@ async fn create_worker(
 async fn list_workers(State(state): State<AppState>) -> Result<Json<Vec<Worker>>, ApiError> {
     let rows: Vec<WorkerRow> =
         sqlx::query_as(&format!("SELECT {WORKER_COLUMNS} FROM workers ORDER BY created_at ASC, id ASC")).fetch_all(&state.pool).await?;
-    Ok(Json(rows.into_iter().map(Worker::from).collect()))
+    Ok(Json(rows.into_iter().map(|r| r.into_worker(&state.config)).collect()))
 }
 
 /// Only the authenticated worker itself gets here, so a missing row means the reaper marked it dead since: 401, and a
 /// dead worker is never resurrected.
-async fn set_status(db: impl SqliteExecutor<'_>, id: &str, status: &str) -> Result<Worker, ApiError> {
+async fn set_status(db: impl SqliteExecutor<'_>, config: &Config, id: &str, status: &str) -> Result<Worker, ApiError> {
     let row: Option<WorkerRow> = sqlx::query_as(&format!(
         "UPDATE workers SET status = ?2, last_heartbeat = {NOW} WHERE id = ?1 AND status != 'dead' RETURNING {WORKER_COLUMNS}"
     ))
@@ -541,12 +543,12 @@ async fn set_status(db: impl SqliteExecutor<'_>, id: &str, status: &str) -> Resu
     .bind(status)
     .fetch_optional(db)
     .await?;
-    row.map(Worker::from).ok_or(ApiError::Unauthorized)
+    row.map(|r| r.into_worker(config)).ok_or(ApiError::Unauthorized)
 }
 
 async fn register(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
     caller.require_worker(&id)?;
-    Ok(Json(set_status(&state.pool, &id, "idle").await?))
+    Ok(Json(set_status(&state.pool, &state.config, &id, "idle").await?))
 }
 
 async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
@@ -555,7 +557,7 @@ async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<C
         .bind(&id)
         .fetch_optional(&state.pool)
         .await?;
-    row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
+    row.map(|r| Json(r.into_worker(&state.config))).ok_or(ApiError::NotFound)
 }
 
 /// Hands the worker the lowest-ranked unassigned, unblocked ticket in a state its type has a prompt for. 204 when there is none.
@@ -587,11 +589,11 @@ async fn poll(
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {
-        set_status(&mut *tx, &id, "idle").await?;
+        set_status(&mut *tx, &state.config, &id, "idle").await?;
         tx.commit().await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    set_status(&mut *tx, &id, "busy").await?;
+    set_status(&mut *tx, &state.config, &id, "busy").await?;
     let (run,): (i64,) = sqlx::query_as(&format!("INSERT INTO runs (ticket_id, worker_id, started_at) VALUES (?1, ?2, {NOW}) RETURNING id"))
         .bind(row.id)
         .bind(&id)

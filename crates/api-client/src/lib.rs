@@ -148,6 +148,8 @@ pub struct ListTickets {
 pub struct Worker {
     pub id: String,
     pub worker_type: String,
+    /// The agent the worker's type runs, from orchestrator config; null once the type is no longer configured.
+    pub agent: Option<String>,
     /// One of: starting, idle, busy, dead
     pub status: String,
     pub created_at: String,

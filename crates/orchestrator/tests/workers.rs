@@ -70,6 +70,7 @@ async fn create_register_heartbeat_list() {
     let listed = human.list_workers().await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!((listed[0].id.as_str(), listed[0].status.as_str(), listed[0].last_heartbeat.as_deref(), listed[0].ticket), (w.id.as_str(), "starting", None, None));
+    assert_eq!(listed[0].agent.as_deref(), Some("claude-code"));
     // Never the token, in any representation.
     let raw = serde_json::to_string(&listed).unwrap();
     assert!(!raw.contains(&w.token) && !raw.contains("token"));
