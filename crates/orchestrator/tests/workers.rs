@@ -70,6 +70,7 @@ async fn create_register_heartbeat_list() {
     let listed = human.list_workers().await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!((listed[0].id.as_str(), listed[0].status.as_str(), listed[0].last_heartbeat.as_deref(), listed[0].ticket), (w.id.as_str(), "starting", None, None));
+    assert_eq!(listed[0].agent.as_deref(), Some("claude-code"));
     // Never the token, in any representation.
     let raw = serde_json::to_string(&listed).unwrap();
     assert!(!raw.contains(&w.token) && !raw.contains("token"));
@@ -173,6 +174,7 @@ async fn poll_opens_a_run_usage_ends_it_and_logs_are_kept_per_worker_and_run() {
     let runs = human.get_ticket(t).await.unwrap().runs;
     assert_eq!((runs.len(), runs[0].id, runs[0].worker_id.as_str(), runs[0].ticket_id), (1, run, w.id.as_str(), t));
     assert!(runs[0].ended_at.is_none() && !runs[0].started_at.is_empty());
+    assert_eq!(runs[0].agent.as_deref(), Some("claude-code"));
 
     wc.ship_logs(&w.id, &lines(Some(run), &["a", "b"])).await.unwrap();
     assert_eq!(status(wc2.ship_logs(&w2.id, &lines(Some(run), &["x"])).await), 400, "another worker's run");

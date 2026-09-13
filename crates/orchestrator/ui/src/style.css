@@ -37,13 +37,10 @@ form { display: grid; gap: .5rem; margin-bottom: 1rem; }
 .row { display: flex; gap: .75rem; align-items: center; justify-content: flex-end; }
 .saved { color: var(--icp-fg-secondary); font-size: 13px; }
 #toolbar { margin-bottom: 1rem; }
-dialog { width: 92vw; max-width: 90rem; height: 90vh; padding: 0; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); }
+dialog { width: 92vw; max-width: 60rem; height: 90vh; padding: 0; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); }
 dialog > *, .pane { padding: 1.25rem 1.5rem; }
 dialog > h2 { padding-bottom: 0; }
-.pane { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 2.5rem; }
-.pane > h2 { grid-column: 1 / -1; }
-.pane > .comments > h3 { margin-top: 0; }
-@media (max-width: 60rem) { .pane { grid-template-columns: minmax(0, 1fr); } }
+.empty { color: var(--icp-fg-muted); }
 dialog::backdrop { background: rgba(26, 26, 26, .45); }
 dialog h2 { display: flex; gap: .5rem; align-items: center; }
 dialog h2 button { margin-left: auto; }
@@ -79,9 +76,12 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .relation.blocking a { color: var(--icp-accent-strong); font-weight: 500; }
 .relation button { margin-left: auto; font-size: 11px; padding: .1rem .5rem; }
 #relations form { grid-template-columns: auto minmax(0, 1fr) auto; margin-top: .75rem; }
-#runs { margin-top: 1rem; }
 .run { display: flex; gap: .75rem; align-items: center; padding: .3rem 0; border-top: 1px solid var(--icp-rule); font: 12px var(--mono); color: var(--icp-fg-secondary); }
+.run.selected { background: var(--icp-accent-dim); border-left: 3px solid var(--icp-accent); padding-left: .5rem; }
 .run.selected a { font-weight: 600; }
+.log-head { display: flex; gap: .75rem; align-items: center; margin-top: .75rem; font: 12px var(--mono); color: var(--icp-fg-secondary); }
+.log-head span { margin-right: auto; }
+.log-head + .log { margin-top: .35rem; }
 .log { font: 12px/1.45 var(--mono); background: var(--icp-bg-sunk); color: var(--icp-fg); padding: .6rem .75rem; margin: .5rem 0 0; max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 #worker-log .log { max-height: calc(90vh - 6rem); }
 #workers tr[data-ticket] { cursor: pointer; }
@@ -89,6 +89,7 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 
 .comment { border-top: 1px solid var(--icp-rule); border-left: 3px solid var(--icp-rule); padding: .75rem 0 .75rem .75rem; margin-bottom: .75rem; }
 .comments > form { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--icp-rule); }
+#runs { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--icp-rule); }
 .comment.human { border-left-color: var(--icp-accent); }
 .comment small { color: var(--icp-fg-muted); font-family: var(--mono); font-size: 11px; }
 .comment .tag { padding: 0 .3em; letter-spacing: 0.1em; font-size: 10px; }
@@ -103,3 +104,20 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .notice { padding: .5rem .75rem; background: var(--icp-bg-sunk); border-left: 3px solid var(--icp-fg-muted); color: var(--icp-fg-secondary); }
 .notice button { margin-left: .5rem; }
 .body.collapsed { max-height: 12em; overflow: hidden; mask-image: linear-gradient(#000 60%, transparent); }
+
+/* Pretty run log: events as blocks, raw lines kept in place. */
+.log-view { padding: .15rem .6rem; font-size: 11px; }
+.log.pretty { white-space: normal; font: 13px/1.45 var(--sans); }
+.log.pretty .raw { white-space: pre-wrap; font: 12px/1.45 var(--mono); color: var(--icp-fg-muted); }
+.ev { margin: .35rem 0; }
+.ev summary { margin-bottom: 0; }
+.ev pre { margin: .25rem 0 0 .75rem; padding: .4rem .6rem; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--icp-bg-elev); border-left: 2px solid var(--icp-rule); max-height: 24rem; overflow: auto; }
+.ev.tool summary { color: var(--icp-section-blue); }
+.ev.tool pre { border-left-color: var(--icp-section-blue); }
+.ev.thinking { opacity: .6; }
+.ev.result pre { border-left-color: var(--icp-indicator-teal); }
+.ev.error summary { color: var(--icp-accent); }
+.ev.error pre { border-left-color: var(--icp-accent); }
+.ev.text p { margin: .25rem 0; }
+.ev.final { margin-top: .75rem; padding-top: .5rem; border-top: 1px solid var(--icp-rule); color: var(--icp-fg-secondary); }
+.ev.final.error { color: var(--icp-accent); }

@@ -108,7 +108,7 @@ export function App() {
       <dialog id="worker-log" ref={workerDialog} onClose={workerDismissed} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
         {loggedWorker && <>
           <h2><span>{loggedWorker.id} <span class="tag">{loggedWorker.status}</span></span><button onClick={() => select(null)}>Close</button></h2>
-          <LogPane path={`/workers/${loggedWorker.id}/logs`} live={loggedWorker.status !== "dead"} />
+          <LogPane path={`/workers/${loggedWorker.id}/logs`} live={loggedWorker.status !== "dead"} agent={loggedWorker.agent} />
         </>}
       </dialog>
       <Workers workers={workers} />

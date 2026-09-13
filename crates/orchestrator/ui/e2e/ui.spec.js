@@ -137,14 +137,23 @@ test("shows a run's log live and a worker's whole log", async ({ page, server })
   await expect(page).toHaveURL(new RegExp(`#/tickets/${id}/runs/${job.run}$`));
   const log = page.locator("#detail .log");
   await expect(log).toContainText("first line");
-  await asWorker(`/workers/${w.id}/logs`, { run: job.run, lines: ["second line"] });
+  const ev = JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] } });
+  await asWorker(`/workers/${w.id}/logs`, { run: job.run, lines: ["second line", ev] });
   await expect(log).toContainText("second line");
   await expect(log).not.toContainText("worker starting");
+  // The worker type's agent is claude-code, so the stream-json line renders as a tool block until toggled to raw.
+  await expect(log.locator(".ev.tool summary")).toHaveText("Bash");
+  await page.click("#detail button.log-view:text-is(\"Raw\")");
+  await expect(log.locator(".ev")).toHaveCount(0);
+  await expect(log).toContainText(ev);
   await page.goto("/");
   await page.click(`#workers tr:has-text("${w.id}") a:text-is("Log")`);
   await expect(page).toHaveURL(new RegExp(`#/workers/${w.id}$`));
   await expect(page.locator("#worker-log .log")).toContainText("worker starting");
   await expect(page.locator("#worker-log .log")).toContainText("second line");
+  // The worker's stream is pretty too: its own lines raw, the agent's event as a block.
+  await expect(page.locator("#worker-log .ev.tool summary")).toHaveText("Bash");
+  await expect(page.locator("#worker-log button.log-view")).toHaveText("Raw");
   await page.keyboard.press("Escape");
   await expect(page.locator("#worker-log")).toBeHidden();
   await expect(page).toHaveURL(/\/#?$/);
