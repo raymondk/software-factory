@@ -37,7 +37,6 @@ export function Detail({ ticket: t, usage, run }) {
   return (
     <div class="pane">
       <h2><span>#{t.id} {t.title}</span><button onClick={() => select(null)}>Close</button></h2>
-      <div>
       <p>rank: {t.rank} · assignee: {t.assignee ?? "none"}</p>
       <p>created: {t.created_at} · updated: {t.updated_at}</p>
       <p>{usageLine(usage)}</p>
@@ -57,7 +56,6 @@ export function Detail({ ticket: t, usage, run }) {
         <h3>Comments</h3>
         <Thread ticket={t} />
         <CommentForm ticket={t} />
-      </div>
       </div>
       <Runs ticket={t} run={run} />
     </div>
