@@ -7,7 +7,7 @@ import { Detail } from "./Detail.jsx";
 import { Workers } from "./Workers.jsx";
 import { Metrics } from "./Metrics.jsx";
 import { LogPane } from "./Log.jsx";
-import { Close } from "./Close.jsx";
+import { Header } from "./Header.jsx";
 
 // What is open lives in the URL hash, so reload, back and forward all go through history:
 // #/tickets/<id>, #/tickets/<id>/runs/<run> (that run's log), #/workers/<id> (the worker's log).
@@ -108,9 +108,8 @@ export function App() {
       </dialog>
       <dialog id="worker-log" ref={workerDialog} onClose={workerDismissed} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
         {loggedWorker && <>
-          <Close onClick={() => select(null)} />
-          <h2><span>{loggedWorker.id} <span class="tag">{loggedWorker.status}</span></span></h2>
-          <LogPane path={`/workers/${loggedWorker.id}/logs`} live={loggedWorker.status !== "dead"} agent={loggedWorker.agent} />
+          <Header kind="Worker log" title={<>{loggedWorker.id} <span class="tag">{loggedWorker.status}</span></>} onClose={() => select(null)} />
+          <div class="scroll" tabindex={-1} autofocus><LogPane path={`/workers/${loggedWorker.id}/logs`} live={loggedWorker.status !== "dead"} agent={loggedWorker.agent} /></div>
         </>}
       </dialog>
       <Metrics metrics={metrics} />
@@ -137,9 +136,8 @@ function CreateDialog() {
     <>
       <div id="toolbar"><button class="primary" onClick={() => { setError(null); dialog.current.showModal(); }}>New ticket</button></div>
       <dialog ref={dialog}>
-        <Close onClick={() => dialog.current.close()} />
-        <h2><span>New ticket</span></h2>
-        <form id="create" onSubmit={submit}>
+        <Header kind="Ticket" title="New ticket" onClose={() => dialog.current.close()} />
+        <form id="create" class="scroll" tabindex={-1} autofocus onSubmit={submit}>
           {error && <div class="error">{error}</div>}
           <input name="title" placeholder="Title" required />
           <select name="state">{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>

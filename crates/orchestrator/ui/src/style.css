@@ -37,17 +37,22 @@ form { display: grid; gap: .5rem; margin-bottom: 1rem; }
 .row { display: flex; gap: .75rem; align-items: center; justify-content: flex-end; }
 .saved { color: var(--icp-fg-secondary); font-size: 13px; }
 #toolbar { margin-bottom: 1rem; }
-dialog { width: 92vw; max-width: 60rem; height: 90vh; padding: 0; overflow: auto; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); }
-dialog > *, .pane { padding: 1.25rem 1.5rem; }
-dialog > h2 { padding-bottom: 0; }
-.empty { color: var(--icp-fg-muted); }
+/* Dialogs: a fixed header (kind, title, close icon) over a body that scrolls on its own. */
+dialog { width: 92vw; max-width: 60rem; height: 90vh; padding: 0; border: 1px solid var(--icp-rule); background: var(--icp-bg-elev); color: var(--icp-fg); flex-direction: column; overflow: hidden; }
+dialog[open] { display: flex; }
 dialog::backdrop { background: rgba(26, 26, 26, .45); }
-dialog h2 { display: flex; gap: .5rem; align-items: center; margin-right: 2.5rem; }
-/* Zero-height sticky bar: the close icon stays at the dialog's top-right while its content scrolls. */
-dialog > .close { position: sticky; top: 0; z-index: 1; height: 0; padding: 0; display: flex; justify-content: flex-end; }
-.close button { margin: .6rem .6rem 0 0; width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: 50%; font: 22px/1 var(--sans); color: var(--icp-fg-secondary); background: var(--icp-bg-elev); }
-.close button:hover { color: var(--icp-fg); background: var(--icp-bg-sunk); }
+dialog > header { flex: none; display: flex; gap: .75rem; align-items: baseline; padding: .9rem 1rem .9rem 1.5rem; border-bottom: 1px solid var(--icp-rule); background: var(--icp-bg-sunk); }
+dialog > header h2 { margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+dialog > header .tag { white-space: nowrap; }
+dialog > header button { align-self: center; width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: 50%; font: 22px/1 var(--sans); color: var(--icp-fg-secondary); }
+dialog > header button:hover { color: var(--icp-fg); background: var(--icp-bg-elev); }
+.scroll { flex: 1; min-height: 0; overflow: auto; padding: 1.25rem 1.5rem; }
+.scroll:focus { outline: none; }
+form.scroll { align-content: start; }
+.empty { color: var(--icp-fg-muted); }
 dialog form { margin-bottom: 0; }
+#worker-log .scroll { display: flex; flex-direction: column; }
+#worker-log .log { flex: 1; max-height: none; }
 pre { white-space: pre-wrap; }
 
 #board { display: grid; margin-bottom: 1.5rem; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .5rem; }
@@ -86,7 +91,6 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .log-head span { margin-right: auto; }
 .log-head + .log { margin-top: .35rem; }
 .log { font: 12px/1.45 var(--mono); background: var(--icp-bg-sunk); color: var(--icp-fg); padding: .6rem .75rem; margin: .5rem 0 0; max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-#worker-log .log { max-height: calc(90vh - 6rem); }
 #metrics-section, #workers-section { margin-top: 2.5rem; }
 #workers-section > button { margin-top: .75rem; }
 #workers tr[data-ticket] { cursor: pointer; }

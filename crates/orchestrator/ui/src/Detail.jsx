@@ -3,7 +3,7 @@ import { api, patch } from "./api.js";
 import { useApp, useBusy } from "./context.js";
 import { ACTIONS, STATES, ago, isHttp, markdown, usageLine } from "./format.js";
 import { LogPane } from "./Log.jsx";
-import { Close } from "./Close.jsx";
+import { Header } from "./Header.jsx";
 
 const FIELDS = ["title", "state", "description", "links"];
 const same = (a, b) => FIELDS.every(k => a[k] === b[k]);
@@ -36,9 +36,8 @@ export function Detail({ ticket: t, usage, run }) {
   const action = state => busy(async () => { await patch(t.id, { state }); await refresh(); });
 
   return (<>
-    <Close onClick={() => select(null)} />
-    <div class="pane">
-      <h2><span>#{t.id} {t.title}</span></h2>
+    <Header kind="Ticket" title={`#${t.id} ${t.title}`} onClose={() => select(null)} />
+    <div class="pane scroll" tabindex={-1} autofocus>
       <p>rank: {t.rank} · assignee: {t.assignee ?? "none"}</p>
       <p>created: {t.created_at} · updated: {t.updated_at}</p>
       <p>{usageLine(usage)}</p>
