@@ -300,6 +300,9 @@ async fn comments_add_list_resolve() {
     let got = client.get_ticket(t.id).await.unwrap();
     assert_eq!(got.comments.iter().map(|c| (c.id, c.resolved)).collect::<Vec<_>>(), vec![(first.id, true), (second.id, false)]);
     assert_eq!(got.comments[1].body, "second");
+    let back = client.unresolve_comment(t.id, first.id).await.unwrap();
+    assert!(!back.resolved && back.id == first.id);
+    assert!(!client.get_ticket(t.id).await.unwrap().comments[0].resolved);
     // The list endpoint does not embed threads.
     assert!(client.list_tickets(&Default::default()).await.unwrap().iter().all(|t| t.comments.is_empty()));
 }
@@ -321,6 +324,7 @@ async fn comment_errors() {
     assert_eq!(status(client.resolve_comment(t.id, 9999).await), 404);
     assert_eq!(status(client.resolve_comment(9999, c.id).await), 404);
     assert_eq!(status(client.resolve_comment(other.id, c.id).await), 404);
+    assert_eq!(status(client.unresolve_comment(other.id, c.id).await), 404);
     match client.list_comments(9999).await {
         Err(Error::Api { status: 404, .. }) => {}
         other => panic!("expected 404, got {other:?}"),

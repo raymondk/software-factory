@@ -114,7 +114,7 @@ Tickets:
 - `POST /tickets/{id}/move`: body `{ before: id }` or `{ after: id }`. Reorders the ticket.
 - `GET /tickets/{id}/comments`
 - `POST /tickets/{id}/comments`
-- `POST /tickets/{id}/comments/{cid}/resolve`
+- `POST /tickets/{id}/comments/{cid}/resolve`, `POST /tickets/{id}/comments/{cid}/unresolve`
 - `POST /tickets/{id}/relations`: body `{ type, ticket }` with `type` `depends_on` or `related_to`. Same ACL as `PATCH`.
 - `DELETE /tickets/{id}/relations/{type}/{ticket}`
 

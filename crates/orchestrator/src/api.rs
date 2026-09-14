@@ -25,6 +25,7 @@ pub fn router(state: AppState) -> Router {
         .route("/tickets/{id}/move", post(move_ticket))
         .route("/tickets/{id}/comments", get(list_comments).post(add_comment))
         .route("/tickets/{id}/comments/{cid}/resolve", post(resolve_comment))
+        .route("/tickets/{id}/comments/{cid}/unresolve", post(unresolve_comment))
         .route("/tickets/{id}/relations", post(add_relation))
         .route("/tickets/{id}/relations/{kind}/{other}", delete(remove_relation))
         .route("/workers", get(list_workers).post(create_worker))
@@ -275,10 +276,19 @@ async fn add_comment(
 }
 
 async fn resolve_comment(State(state): State<AppState>, Path((id, cid)): Path<(i64, i64)>) -> Result<Json<Comment>, ApiError> {
+    set_resolved(&state, id, cid, true).await
+}
+
+async fn unresolve_comment(State(state): State<AppState>, Path((id, cid)): Path<(i64, i64)>) -> Result<Json<Comment>, ApiError> {
+    set_resolved(&state, id, cid, false).await
+}
+
+async fn set_resolved(state: &AppState, id: i64, cid: i64, resolved: bool) -> Result<Json<Comment>, ApiError> {
     let row: Option<CommentRow> =
-        sqlx::query_as(&format!("UPDATE comments SET resolved = 1 WHERE id = ?1 AND ticket_id = ?2 RETURNING {COMMENT_COLUMNS}"))
+        sqlx::query_as(&format!("UPDATE comments SET resolved = ?3 WHERE id = ?1 AND ticket_id = ?2 RETURNING {COMMENT_COLUMNS}"))
             .bind(cid)
             .bind(id)
+            .bind(resolved)
             .fetch_optional(&state.pool)
             .await?;
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)

@@ -316,6 +316,11 @@ impl Client {
         Self::send(r).await
     }
 
+    pub async fn unresolve_comment(&self, id: i64, cid: i64) -> Result<Comment, Error> {
+        let r = self.http.post(format!("{}/tickets/{id}/comments/{cid}/unresolve", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
     /// Returns the ticket with its relations.
     pub async fn add_relation(&self, id: i64, req: &CreateRelation) -> Result<Ticket, Error> {
         let r = self.http.post(format!("{}/tickets/{id}/relations", self.base)).bearer_auth(&self.token).json(req);

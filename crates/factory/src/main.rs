@@ -153,6 +153,8 @@ enum TicketCommand {
     Comments { id: i64 },
     /// Resolve a comment
     Resolve { id: i64, cid: i64 },
+    /// Unresolve a comment
+    Unresolve { id: i64, cid: i64 },
 }
 
 #[tokio::main]
@@ -213,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
             TicketCommand::Comment { id, body } => print(&client.add_comment(id, &CreateComment { body }).await?),
             TicketCommand::Comments { id } => client.list_comments(id).await?.iter().for_each(print_comment),
             TicketCommand::Resolve { id, cid } => print(&client.resolve_comment(id, cid).await?),
+            TicketCommand::Unresolve { id, cid } => print(&client.unresolve_comment(id, cid).await?),
         },
         Command::Worker { command } => match command {
             WorkerCommand::Create { worker_type } => print(&client.create_worker(&CreateWorker { worker_type }).await?),
