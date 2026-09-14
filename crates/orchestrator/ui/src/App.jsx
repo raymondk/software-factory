@@ -7,6 +7,7 @@ import { Detail } from "./Detail.jsx";
 import { Workers } from "./Workers.jsx";
 import { Metrics } from "./Metrics.jsx";
 import { LogPane } from "./Log.jsx";
+import { Close } from "./Close.jsx";
 
 // What is open lives in the URL hash, so reload, back and forward all go through history:
 // #/tickets/<id>, #/tickets/<id>/runs/<run> (that run's log), #/workers/<id> (the worker's log).
@@ -107,12 +108,13 @@ export function App() {
       </dialog>
       <dialog id="worker-log" ref={workerDialog} onClose={workerDismissed} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
         {loggedWorker && <>
-          <h2><span>{loggedWorker.id} <span class="tag">{loggedWorker.status}</span></span><button onClick={() => select(null)}>Close</button></h2>
+          <Close onClick={() => select(null)} />
+          <h2><span>{loggedWorker.id} <span class="tag">{loggedWorker.status}</span></span></h2>
           <LogPane path={`/workers/${loggedWorker.id}/logs`} live={loggedWorker.status !== "dead"} agent={loggedWorker.agent} />
         </>}
       </dialog>
-      <Workers workers={workers} />
       <Metrics metrics={metrics} />
+      <Workers workers={workers} />
     </Ctx.Provider>
   );
 }
@@ -135,7 +137,8 @@ function CreateDialog() {
     <>
       <div id="toolbar"><button class="primary" onClick={() => { setError(null); dialog.current.showModal(); }}>New ticket</button></div>
       <dialog ref={dialog}>
-        <h2><span>New ticket</span><button onClick={() => dialog.current.close()}>Close</button></h2>
+        <Close onClick={() => dialog.current.close()} />
+        <h2><span>New ticket</span></h2>
         <form id="create" onSubmit={submit}>
           {error && <div class="error">{error}</div>}
           <input name="title" placeholder="Title" required />

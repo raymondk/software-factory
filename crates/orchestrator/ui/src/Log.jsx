@@ -7,8 +7,9 @@ const RENDERERS = { "claude-code": claudeCode };
 
 // Monospace scrolling pane fed by `path?after=<line id>`. Polls every second while `live`, once more when it stops.
 // Sticks to the bottom unless the reader has scrolled up. With an `agent` the UI knows, it opens in the pretty view
-// with a toggle to raw. A header row shows `title`, the toggle and a Close button (`onClose`) when any is given.
-export function LogPane({ path, live, agent, title, onClose }) {
+// with a toggle to raw. A header row shows `title`, the toggle, a fold toggle (`onFold`, with `folded`) and a Close
+// button (`onClose`) when any is given. Folding hides the pane but keeps it fetching, so the live tail is intact.
+export function LogPane({ path, live, agent, title, folded, onFold, onClose }) {
   const render = RENDERERS[agent];
   const [pretty, setPretty] = useState(true);
   const [lines, setLines] = useState([]);
@@ -39,19 +40,20 @@ export function LogPane({ path, live, agent, title, onClose }) {
     const i = setInterval(more, 1000);
     return () => clearInterval(i);
   }, [path, live]);
-  useEffect(() => { const p = pre.current; if (stick.current) p.scrollTop = p.scrollHeight; }, [lines]);
+  useEffect(() => { const p = pre.current; if (stick.current && !folded) p.scrollTop = p.scrollHeight; }, [lines, folded]);
   const onScroll = e => { const p = e.currentTarget; stick.current = p.scrollHeight - p.scrollTop - p.clientHeight < 40; };
   const show = render && pretty ? l => render(l.line) ?? <div class="raw">{l.line}</div> : l => <div class="raw">{l.line}</div>;
   return (
     <>
-      {(render || title || onClose) && (
+      {(render || title || onFold || onClose) && (
         <div class="log-head">
           {title && <span>{title}</span>}
           {render && <button class="log-view" onClick={() => setPretty(!pretty)}>{pretty ? "Raw" : "Pretty"}</button>}
+          {onFold && <button class="log-view" onClick={onFold}>{folded ? "Expand" : "Collapse"}</button>}
           {onClose && <button class="log-view" onClick={onClose}>Close</button>}
         </div>
       )}
-      <pre class={"log" + (render && pretty ? " pretty" : "")} ref={pre} onScroll={onScroll}>{lines.map(l => <div key={l.id} class="line">{show(l)}</div>)}</pre>
+      <pre class={"log" + (render && pretty ? " pretty" : "")} ref={pre} onScroll={onScroll} hidden={folded}>{lines.map(l => <div key={l.id} class="line">{show(l)}</div>)}</pre>
     </>
   );
 }

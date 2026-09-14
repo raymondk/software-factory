@@ -63,7 +63,7 @@ test("opens a ticket by card click and by URL", async ({ page, server }) => {
   await expect(card(page, t.id)).toHaveClass(/selected/);
   await page.goto(`/#/tickets/${t.id}`);
   await expect(page.locator("#detail h2")).toContainText("Open me");
-  await page.click("#detail h2 button");
+  await page.click("#detail .close button");
   await expect(page.locator("#detail")).toBeHidden();
   await expect(page).toHaveURL(/\/#?$/);
   await page.goBack();

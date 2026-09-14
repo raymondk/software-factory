@@ -3,6 +3,7 @@ import { api, patch } from "./api.js";
 import { useApp, useBusy } from "./context.js";
 import { ACTIONS, STATES, ago, isHttp, markdown, usageLine } from "./format.js";
 import { LogPane } from "./Log.jsx";
+import { Close } from "./Close.jsx";
 
 const FIELDS = ["title", "state", "description", "links"];
 const same = (a, b) => FIELDS.every(k => a[k] === b[k]);
@@ -34,9 +35,10 @@ export function Detail({ ticket: t, usage, run }) {
   });
   const action = state => busy(async () => { await patch(t.id, { state }); await refresh(); });
 
-  return (
+  return (<>
+    <Close onClick={() => select(null)} />
     <div class="pane">
-      <h2><span>#{t.id} {t.title}</span><button onClick={() => select(null)}>Close</button></h2>
+      <h2><span>#{t.id} {t.title}</span></h2>
       <p>rank: {t.rank} · assignee: {t.assignee ?? "none"}</p>
       <p>created: {t.created_at} · updated: {t.updated_at}</p>
       <p>{usageLine(usage)}</p>
@@ -59,7 +61,7 @@ export function Detail({ ticket: t, usage, run }) {
       </div>
       <Runs ticket={t} run={run} />
     </div>
-  );
+  </>);
 }
 
 // Dependencies, dependents and related tickets; each opens that ticket. A `blocks` entry is the other ticket's
@@ -108,21 +110,24 @@ function Relations({ ticket: t }) {
 }
 
 // Runs newest first; the one in the URL is highlighted and shows its log, following live while the run is open.
-// Closing the log goes back to the ticket's own URL.
+// Clicking the selected run again (or Collapse) folds the log in place; closing it goes back to the ticket's own URL.
 function Runs({ ticket: t, run }) {
   const { select } = useApp();
   const open = t.runs.find(r => r.id === run);
+  const [folded, setFolded] = useState(false);
+  useEffect(() => setFolded(false), [run]);
+  const toggle = e => { e.preventDefault(); setFolded(f => !f); };
   return (
     <section id="runs">
       <h3>Runs</h3>
       {t.runs.length === 0 && <p class="empty">No runs yet</p>}
       {t.runs.map(r => (
         <div key={r.id} class={"run" + (r.id === run ? " selected" : "")}>
-          <a href={`#/tickets/${t.id}/runs/${r.id}`}>run {r.id}</a><span>{r.worker_id}</span>
+          <a href={`#/tickets/${t.id}/runs/${r.id}`} onClick={r.id === run ? toggle : undefined}>run {r.id}</a><span>{r.worker_id}</span>
           <span title={r.started_at}>{ago(r.started_at)}</span><span class="tag">{r.ended_at ? "ended" : "running"}</span>
         </div>
       ))}
-      {open && <LogPane path={`/runs/${open.id}/logs`} live={!open.ended_at} agent={open.agent}
+      {open && <LogPane path={`/runs/${open.id}/logs`} live={!open.ended_at} agent={open.agent} folded={folded} onFold={toggle}
                         title={`run ${open.id} · ${open.worker_id}`} onClose={() => select(t.id)} />}
     </section>
   );
