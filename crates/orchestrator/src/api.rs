@@ -36,6 +36,7 @@ pub fn router(state: AppState) -> Router {
         .route("/workers/{id}/logs", get(worker_logs).post(ship_logs))
         .route("/runs/{id}/logs", get(run_logs))
         .route("/metrics", get(metrics))
+        .route("/agents", get(agents))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().route("/", get(ui)).route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT })).merge(api).with_state(state)
 }
@@ -829,6 +830,11 @@ where
     .fetch_all(db)
     .await?;
     Ok(rows.into_iter().map(|r| Breakdown { key: into(r.key), totals: r.totals.into() }).collect())
+}
+
+/// Spec 4.2: what providers advertise, for the UI to offer when setting agent and model on a ticket.
+async fn agents(State(state): State<AppState>) -> Json<std::collections::BTreeMap<String, Vec<String>>> {
+    Json(state.providers.agents())
 }
 
 async fn metrics(State(state): State<AppState>) -> Result<Json<Metrics>, ApiError> {

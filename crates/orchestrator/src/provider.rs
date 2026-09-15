@@ -107,6 +107,23 @@ impl Providers {
         })
     }
 
+    /// Every agent some provider's last status advertised, with the models advertised for it (in advertised order,
+    /// so a default comes first).
+    pub fn agents(&self) -> BTreeMap<String, Vec<String>> {
+        let mut agents: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for s in self.statuses.read().unwrap().values() {
+            for (name, info) in &s.agents {
+                let models = agents.entry(name.clone()).or_default();
+                for m in &info.models {
+                    if !models.contains(m) {
+                        models.push(m.clone());
+                    }
+                }
+            }
+        }
+        agents
+    }
+
     /// The models `provider` supports for `agent`, per its last status; empty when unknown.
     pub fn models(&self, provider: &str, agent: &str) -> Vec<String> {
         self.statuses.read().unwrap().get(provider).and_then(|s| s.agents.get(agent)).map(|a| a.models.clone()).unwrap_or_default()

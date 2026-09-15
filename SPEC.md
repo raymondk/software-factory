@@ -129,6 +129,7 @@ Workers:
 - `GET /workers/{id}/logs?after=<line id>`: the worker's whole stream, oldest first, at most 1000 lines per call.
 - `GET /runs/{id}/logs?after=<line id>`: one run's lines, same shape. `after` supports polling for live output.
 - `GET /workers`: list workers with their agent, provider and status.
+- `GET /agents`: the agents some provider advertised in its last status, each with the union of the models advertised for it. What the UI offers when setting agent and model on a ticket.
 
 Metrics:
 - `GET /metrics`: totals and breakdowns per ticket, per worker, per agent and per model. Tokens in, tokens out, cost, tickets completed, tickets failed.
