@@ -31,9 +31,10 @@ test("an edited form keeps the user's text and offers a reload", () => {
 });
 
 test("resolved comments are hidden behind a toggle", () => {
-  const comments = [{ id: 1, author: "human", body: "open", resolved: false, created_at: new Date().toISOString() },
-                    { id: 2, author: "w1", body: "closed", resolved: true, created_at: new Date().toISOString() }];
+  const comments = [{ id: 1, author: "Alice", body: "open", resolved: false, created_at: new Date().toISOString() },
+                    { id: 2, author: "w-0a1b2c3d", body: "closed", resolved: true, created_at: new Date().toISOString() }];
   const { container } = mount(ticket({ comments }));
+  expect([...container.querySelectorAll(".comment")].map(c => c.className.includes("worker"))).toEqual([false, true]);
   expect(container.querySelector(".comment.resolved").hidden).toBe(true);
   fireEvent.click(screen.getByText("Show 1 resolved"));
   expect(container.querySelector(".comment.resolved").hidden).toBe(false);

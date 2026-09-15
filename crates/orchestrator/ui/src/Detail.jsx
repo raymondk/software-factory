@@ -169,12 +169,13 @@ function Comment({ ticket: t, comment: c, hidden }) {
   const busy = useBusy();
   const [collapsed, setCollapsed] = useState(true);
   const long = c.body.length > 600 || c.body.split("\n").length > 12;
-  const kind = c.author === "human" ? "human" : "worker";
+  // Workers comment under their id; the admin and named developers are humans.
+  const kind = /^w-[0-9a-f]{8}$/.test(c.author) ? "worker" : "human";
   const set = to => busy(async () => { await api(`/tickets/${t.id}/comments/${c.id}/${to}`, { method: "POST" }); await refresh(); });
   return (
     <div class={`comment ${kind}` + (c.resolved ? " resolved" : "")} hidden={hidden}>
       <small>
-        {kind === "worker" ? c.author + " " : ""}<span class="tag">{kind}</span> · <span title={c.created_at}>{ago(c.created_at)}</span>{" "}
+        {c.author} <span class="tag">{kind}</span> · <span title={c.created_at}>{ago(c.created_at)}</span>{" "}
         <button onClick={set(c.resolved ? "unresolve" : "resolve")}>{c.resolved ? "Unresolve" : "Resolve"}</button>
       </small>
       <div class={"body" + (long && collapsed ? " collapsed" : "")} dangerouslySetInnerHTML={{ __html: markdown(c.body) }} />
