@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use orchestrator::provider::{AgentInfo, Providers, ProviderWorker, StartWorker, Status};
@@ -21,8 +21,10 @@ heartbeat_timeout = "60s"
 max_workers = 3
 [providers.a]
 url = "unused"
+token = "provider-secret"
 [providers.b]
 url = "unused"
+token = "provider-secret"
 [agents.claude-code]
 run_timeout = "1h"
 [agents.codex]
@@ -55,10 +57,18 @@ fn both() -> BTreeMap<String, AgentInfo> {
     BTreeMap::from([("claude-code".to_string(), agent(&["m"])), ("codex".to_string(), agent(&["m"]))])
 }
 
+/// The token `CONFIG` gives every provider.
+fn authed(headers: &HeaderMap) -> bool {
+    headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) == Some("Bearer provider-secret")
+}
+
 async fn serve_fake(fake: Fake) -> (String, Shared) {
     let fake = Arc::new(Mutex::new(fake));
     let router = Router::new()
-        .route("/workers", post(|State(f): State<Shared>, Json(req): Json<StartWorker>| async move {
+        .route("/workers", post(|State(f): State<Shared>, headers: HeaderMap, Json(req): Json<StartWorker>| async move {
+            if !authed(&headers) {
+                return StatusCode::UNAUTHORIZED;
+            }
             let mut f = f.lock().unwrap();
             if f.fail_start {
                 return StatusCode::INTERNAL_SERVER_ERROR;
@@ -67,7 +77,10 @@ async fn serve_fake(fake: Fake) -> (String, Shared) {
             f.starts.push(req);
             StatusCode::CREATED
         }))
-        .route("/workers/{id}", delete(|State(f): State<Shared>, Path(id): Path<String>| async move {
+        .route("/workers/{id}", delete(|State(f): State<Shared>, headers: HeaderMap, Path(id): Path<String>| async move {
+            if !authed(&headers) {
+                return StatusCode::UNAUTHORIZED;
+            }
             let mut f = f.lock().unwrap();
             f.stops.push(id.clone());
             let before = f.running.len();

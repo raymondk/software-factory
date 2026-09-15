@@ -1,6 +1,7 @@
 [provider]
 listen = "0.0.0.0:8081"
 max_workers = 4
+token = "change-me"   # the orchestrator sends this to start and stop workers
 
 [agents.claude-code]
 image = "software-factory/worker:latest"

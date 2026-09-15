@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Request, State};
+use axum::http::{header, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -10,12 +11,21 @@ use serde_json::json;
 
 use crate::{docker, AppState, Running};
 
+/// Starting and stopping workers needs the provider token; `/status` is open.
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let workers = Router::new()
         .route("/workers", post(start_worker))
         .route("/workers/{id}", delete(stop_worker))
-        .route("/status", get(status))
-        .with_state(state)
+        .layer(middleware::from_fn_with_state(state.clone(), auth));
+    Router::new().route("/status", get(status)).merge(workers).with_state(state)
+}
+
+async fn auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let token = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
+    if token != Some(state.config.provider.token.as_str()) {
+        return ApiError::Unauthorized.into_response();
+    }
+    next.run(req).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +61,7 @@ pub struct Status {
 }
 
 pub enum ApiError {
+    Unauthorized,
     BadRequest(String),
     NotFound(String),
     Conflict(String),
@@ -66,6 +77,7 @@ impl From<anyhow::Error> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (code, msg) = match self {
+            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),

@@ -15,6 +15,7 @@ max_workers = 4
 
 [providers.local]
 url = "http://localhost:8081"
+token = "change-me"   # must match the provider's [provider] token
 
 [agents.claude-code]
 run_timeout = "1h"
