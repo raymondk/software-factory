@@ -39,6 +39,9 @@ enum WorkerCommand {
     Create {
         #[arg(long)]
         agent: String,
+        /// Provider to record it under (default: the first configured)
+        #[arg(long)]
+        provider: Option<String>,
     },
     /// List workers
     List,
@@ -237,13 +240,14 @@ async fn main() -> anyhow::Result<()> {
             TicketCommand::Unresolve { id, cid } => print(&client.unresolve_comment(id, cid).await?),
         },
         Command::Worker { command } => match command {
-            WorkerCommand::Create { agent } => print(&client.create_worker(&CreateWorker { agent }).await?),
+            WorkerCommand::Create { agent, provider } => print(&client.create_worker(&CreateWorker { agent, provider }).await?),
             WorkerCommand::List => {
                 for w in client.list_workers().await? {
                     println!(
-                        "{}\t{}\t{}\t{}\t{}",
+                        "{}\t{}\t{}\t{}\t{}\t{}",
                         w.id,
                         w.agent,
+                        w.provider,
                         w.status,
                         w.last_heartbeat.as_deref().unwrap_or("-"),
                         w.ticket.map(|t| format!("#{t}")).unwrap_or_else(|| "-".into())

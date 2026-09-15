@@ -31,7 +31,7 @@ input, textarea, select { font: inherit; padding: .4rem .5rem; border: 1px solid
 #error button { margin-left: auto; border: 0; color: inherit; padding: 0 .4rem; }
 table { border-collapse: collapse; width: 100%; }
 td, th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--icp-rule); }
-#metrics td:not(:first-child), #workers td:first-child, #workers td:nth-child(4), #totals { font: 13px var(--mono); }
+#metrics td:not(:first-child), #workers td:first-child, #workers td:nth-child(5), #totals { font: 13px var(--mono); }
 form { display: grid; gap: .5rem; margin-bottom: 1rem; }
 /* Form submit buttons sit in a row aligned to the right, at the same pill size as every other button. */
 .row { display: flex; gap: .75rem; align-items: center; justify-content: flex-end; }

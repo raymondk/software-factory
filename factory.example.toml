@@ -13,7 +13,7 @@ heartbeat_timeout = "60s"
 max_workers = 4
 # interval = "10s"
 
-[provider]
+[providers.local]
 url = "http://localhost:8081"
 
 [agents.claude-code]

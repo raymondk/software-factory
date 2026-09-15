@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use api_client::{Client, CreateTicket, Ticket, UpdateTicket};
+use orchestrator::provider::{AgentInfo, Providers, Status};
 use orchestrator::{api, config::Config, db, reaper, AppState};
 
 const TOKEN: &str = "secret";
@@ -19,7 +20,7 @@ token = "x"
 heartbeat_timeout = "60s"
 [scheduler]
 max_workers = 4
-[provider]
+[providers.local]
 url = "http://localhost:8081"
 [agents.command]
 run_timeout = "1s"
@@ -58,8 +59,12 @@ impl Fixture {
         let pool = db::open(&dir.path().join("test.db")).await.unwrap();
         let mut config = Config::parse(CONFIG).unwrap();
         config.orchestrator.token = TOKEN.into();
+        // As if the scheduler had fetched the provider's status: the command agent with its models.
+        let providers = Providers::new(&config);
+        let agents = [("command".to_string(), AgentInfo { models: vec!["m-default".into(), "m-2".into()], default_model: "m-default".into() })].into();
+        providers.statuses.write().unwrap().insert("local".into(), Status { capacity: 4, in_use: 0, agents, workers: vec![] });
         tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));
-        let router = api::router(AppState { pool, config: Arc::new(config) });
+        let router = api::router(AppState { pool, config: Arc::new(config), providers: Arc::new(providers) });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -78,7 +83,7 @@ impl Fixture {
 
     /// Starts the worker binary with `script` (appended to `PRELUDE`) as its agent. Returns the process, worker id, and workspace.
     async fn worker(&self, script: &str) -> (Proc, String, PathBuf) {
-        let w = self.human.create_worker(&api_client::CreateWorker { agent: "command".into() }).await.unwrap();
+        let w = self.human.create_worker(&api_client::CreateWorker { agent: "command".into(), provider: None }).await.unwrap();
         let agent = self.dir.path().join(format!("agent-{}.sh", w.id));
         std::fs::write(&agent, format!("{PRELUDE}{script}")).unwrap();
         std::fs::set_permissions(&agent, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();

@@ -1,8 +1,11 @@
 //! Client for the worker provider (spec 5).
 
 use std::collections::BTreeMap;
+use std::sync::RwLock;
 
 use anyhow::Context;
+
+use crate::config::Config;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -66,6 +69,47 @@ impl Provider {
     pub async fn status(&self) -> anyhow::Result<Status> {
         let resp = self.http.get(format!("{}/status", self.url)).send().await.context("provider status")?;
         check(resp).await?.json().await.context("provider status")
+    }
+}
+
+/// Every configured provider, with the last status each returned. Shared by the scheduler, which refreshes it, and
+/// the API, which validates ticket agents and models and filters polls against it.
+pub struct Providers {
+    pub clients: BTreeMap<String, Provider>,
+    pub statuses: RwLock<BTreeMap<String, Status>>,
+}
+
+impl Providers {
+    pub fn new(config: &Config) -> Providers {
+        let clients = config.providers.iter().map(|(name, p)| (name.clone(), Provider::new(&p.url))).collect();
+        Providers { clients, statuses: RwLock::new(BTreeMap::new()) }
+    }
+
+    /// Asks every provider for its status, remembering each answer. Returns the ones that answered this time.
+    pub async fn refresh(&self) -> BTreeMap<String, Status> {
+        let mut fresh = BTreeMap::new();
+        for (name, client) in &self.clients {
+            match client.status().await {
+                Ok(status) => {
+                    fresh.insert(name.clone(), status);
+                }
+                Err(e) => eprintln!("scheduler: provider {name}: {e:#}"),
+            }
+        }
+        self.statuses.write().unwrap().extend(fresh.clone());
+        fresh
+    }
+
+    /// Whether some provider's last status advertised `agent` (any agent when `None`) supporting `model` (any when `None`).
+    pub fn advertised(&self, agent: Option<&str>, model: Option<&str>) -> bool {
+        self.statuses.read().unwrap().values().any(|s| {
+            s.agents.iter().any(|(name, info)| agent.is_none_or(|a| a == name) && model.is_none_or(|m| info.models.contains(&m.to_string())))
+        })
+    }
+
+    /// The models `provider` supports for `agent`, per its last status; empty when unknown.
+    pub fn models(&self, provider: &str, agent: &str) -> Vec<String> {
+        self.statuses.read().unwrap().get(provider).and_then(|s| s.agents.get(agent)).map(|a| a.models.clone()).unwrap_or_default()
     }
 }
 

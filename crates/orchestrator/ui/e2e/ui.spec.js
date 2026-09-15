@@ -1,6 +1,7 @@
 import { test as base, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -11,13 +12,21 @@ const freePort = () => new Promise(resolve => {
   const s = net.createServer().listen(0, () => { const { port } = s.address(); s.close(() => resolve(port)); });
 });
 
-// Builds a temp config from factory.example.toml (database defaults to next to it, provider pointed at a dead port), starts the orchestrator, kills it after.
+// What the fake provider advertises: agents and models the UI can set on tickets. Capacity 0, so nothing is ever started.
+const STATUS = { capacity: 0, in_use: 0, workers: [], agents: { "claude-code": { models: ["sonnet", "opus"], default_model: "sonnet" }, codex: { models: ["o3"], default_model: "o3" } } };
+
+// Builds a temp config from factory.example.toml (database defaults to next to it, provider pointed at a fake that only answers /status), starts the orchestrator, kills it after.
 const test = base.extend({
   server: [async ({}, use) => {
     const port = await freePort();
+    const provider = http.createServer((req, res) => {
+      const ok = req.method === "GET" && req.url === "/status";
+      res.writeHead(ok ? 200 : 404, { "content-type": "application/json" }).end(JSON.stringify(ok ? STATUS : { error: "no" }));
+    });
+    await new Promise(r => provider.listen(0, "127.0.0.1", r));
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-tests-"));
     const config = path.join(dir, "factory.toml");
-    fs.writeFileSync(config, fs.readFileSync(path.join(root, "factory.example.toml"), "utf8").replace('listen = "0.0.0.0:8080"', `listen = "127.0.0.1:${port}"`).replace("http://localhost:8081", "http://127.0.0.1:1"));
+    fs.writeFileSync(config, fs.readFileSync(path.join(root, "factory.example.toml"), "utf8").replace('listen = "0.0.0.0:8080"', `listen = "127.0.0.1:${port}"`).replace("http://localhost:8081", `http://127.0.0.1:${provider.address().port}`));
     const proc = spawn(path.join(root, "target/debug/orchestrator"), [config], { stdio: ["ignore", "ignore", "inherit"] });
     const url = `http://127.0.0.1:${port}`;
     const api = async (p, opts = {}) => {
@@ -25,11 +34,13 @@ const test = base.extend({
       if (!r.ok) throw new Error(`${opts.method ?? "GET"} ${p}: ${r.status}`);
       return r.json();
     };
+    // Up, and past the scheduler's first pass, which fetches what the provider advertises.
     for (let i = 0; ; i++) {
-      try { await api("/tickets"); break; } catch (e) { if (i > 100) throw new Error("orchestrator did not start: " + e.message); await new Promise(r => setTimeout(r, 100)); }
+      try { await api("/tickets", { method: "POST", body: { title: "probe", agent: "claude-code" } }); break; } catch (e) { if (i > 100) throw new Error("orchestrator did not start: " + e.message); await new Promise(r => setTimeout(r, 100)); }
     }
     await use({ url, api });
     proc.kill();
+    provider.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }, { scope: "worker" }],
   baseURL: async ({ server }, use) => use(server.url),
@@ -184,6 +195,7 @@ test("shows a worker in the Workers panel", async ({ page, server }) => {
   await page.goto("/");
   const row = page.locator("#workers tr", { hasText: w.id });
   await expect(row).toContainText("claude-code");
+  await expect(row).toContainText("local");
   await expect(row).toContainText("starting");
 });
 

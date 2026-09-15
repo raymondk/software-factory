@@ -14,7 +14,7 @@ public_url = "http://172.17.0.1:8080"
 max_workers = 2
 interval = "2s"
 
-[provider]
+[providers.local]
 url = "http://localhost:8081"
 
 [agents.claude-code]
