@@ -129,6 +129,7 @@ Workers:
 - `GET /workers/{id}/logs?after=<line id>`: the worker's whole stream, oldest first, at most 1000 lines per call.
 - `GET /runs/{id}/logs?after=<line id>`: one run's lines, same shape. `after` supports polling for live output.
 - `GET /workers`: list workers with their agent, provider and status.
+- `GET /config`: the running configuration, read-only, without the token. Shown in the UI.
 - `GET /agents`: the agents some provider advertised in its last status, each with the union of the models advertised for it. What the UI offers when setting agent and model on a ticket.
 
 Metrics:
@@ -153,7 +154,7 @@ There is no retry cap. A ticket that keeps killing workers is caught by humans w
 
 ### 4.5 Web UI
 
-Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments, relations and runs, allows creating, editing, relating, reordering tickets, setting agent and model, and changing state, shows workers with their agent and provider, and metrics. A run's log opens from the ticket at `#/tickets/{id}/runs/{run}` and a worker's at `#/workers/{id}`, both following live while open. When the UI knows the agent behind a run or a worker (Claude Code today), its log opens in a pretty view that renders every event as structure, with a toggle to the raw lines; lines that are not events, such as the worker's own output, stay raw in place. The mapping from agent to renderer lives in the UI.
+Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments, relations and runs, allows creating, editing, relating, reordering tickets, setting agent and model, and changing state, shows workers with their agent and provider, metrics, and the running configuration read-only. A run's log opens from the ticket at `#/tickets/{id}/runs/{run}` and a worker's at `#/workers/{id}`, both following live while open. When the UI knows the agent behind a run or a worker (Claude Code today), its log opens in a pretty view that renders every event as structure, with a toggle to the raw lines; lines that are not events, such as the worker's own output, stay raw in place. The mapping from agent to renderer lives in the UI.
 
 Auth: the orchestrator injects the shared token into the page when serving it, and the UI sends it as a bearer header. Anyone who can load the page has the token, so the network decides who can use the UI.
 

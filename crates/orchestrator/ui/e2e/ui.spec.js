@@ -191,6 +191,16 @@ test("reorders with Alt+ArrowDown and by dragging", async ({ page, server }) => 
   await expect.poll(() => ids(server, a.id, b.id)).toEqual([a.id, b.id]);
 });
 
+test("shows the configuration read-only, without the token", async ({ page }) => {
+  await page.goto("/");
+  const section = page.locator("#config-section");
+  await expect(section.locator(".panel h3")).toHaveText(["Project", "Orchestrator", "Scheduler", "Providers", "Agents", "Prompts"]);
+  await expect(section).toContainText("my-project");
+  await expect(section).toContainText("{{ticket.id}}");
+  await expect(section).not.toContainText(TOKEN);
+  await expect(section.locator("input, textarea, select, button")).toHaveCount(0);
+});
+
 test("shows a worker in the Workers panel", async ({ page, server }) => {
   const w = await server.api("/workers", { method: "POST", body: { agent: "claude-code" } });
   await page.goto("/");
