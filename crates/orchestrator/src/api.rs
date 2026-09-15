@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> Router {
         .route("/runs/{id}/logs", get(run_logs))
         .route("/metrics", get(metrics))
         .route("/agents", get(agents))
+        .route("/config", get(config))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().route("/", get(ui)).route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT })).merge(api).with_state(state)
 }
@@ -830,6 +831,11 @@ where
     .fetch_all(db)
     .await?;
     Ok(rows.into_iter().map(|r| Breakdown { key: into(r.key), totals: r.totals.into() }).collect())
+}
+
+/// Spec 4.2: the running configuration, read-only, without the token.
+async fn config(State(state): State<AppState>) -> Json<std::sync::Arc<Config>> {
+    Json(state.config.clone())
 }
 
 /// Spec 4.2: what providers advertise, for the UI to offer when setting agent and model on a ticket.

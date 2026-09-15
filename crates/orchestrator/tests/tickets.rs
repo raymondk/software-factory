@@ -22,6 +22,17 @@ async fn agents_lists_what_providers_advertise() {
 }
 
 #[tokio::test]
+async fn config_is_served_without_the_token() {
+    let (url, _dir) = serve().await;
+    let body = reqwest::Client::new().get(format!("{url}/config")).bearer_auth(TOKEN).send().await.unwrap().text().await.unwrap();
+    assert!(!body.contains(TOKEN), "{body}");
+    let c: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(c["orchestrator"]["heartbeat_timeout"], "1m");
+    assert_eq!(c["providers"]["local"]["url"], "http://localhost:8081");
+    assert!(c["orchestrator"].get("token").is_none());
+}
+
+#[tokio::test]
 async fn agent_and_model_must_be_advertised_together_by_a_provider() {
     let (url, _dir) = serve().await;
     let client = Client::new(&url, TOKEN);

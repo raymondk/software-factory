@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub project: Project,
@@ -19,17 +19,19 @@ pub struct Config {
     pub prompts: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub name: String,
     pub repos: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Orchestrator {
     pub listen: SocketAddr,
+    /// Never leaves the process: `GET /config` serves everything but this.
+    #[serde(skip_serializing)]
     pub token: String,
     #[serde(with = "humantime_serde")]
     pub heartbeat_timeout: Duration,
@@ -39,7 +41,7 @@ pub struct Orchestrator {
     pub public_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scheduler {
     pub max_workers: u32,
@@ -51,13 +53,13 @@ fn default_interval() -> Duration {
     Duration::from_secs(10)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
     pub url: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Agent {
     #[serde(with = "humantime_serde")]
