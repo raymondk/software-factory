@@ -75,7 +75,7 @@ orchestrator "$tmp/factory.toml" > "$tmp/orchestrator.log" 2>&1 &
 orch=$!
 trap cleanup EXIT
 export FACTORY_URL=http://localhost:8080
-FACTORY_TOKEN=$(sed -n 's/^token = "\(.*\)"/\1/p' "$tmp/factory.toml")
+FACTORY_TOKEN=$(sed -n 's/^token = "\(.*\)"/\1/p' "$tmp/factory.toml" | head -1)
 export FACTORY_TOKEN
 for _ in $(seq 50); do factory ticket list > /dev/null 2>&1 && break; sleep 0.2; done
 factory ticket list > /dev/null

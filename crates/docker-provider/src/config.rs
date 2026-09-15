@@ -21,6 +21,8 @@ pub struct Config {
 pub struct Provider {
     pub listen: SocketAddr,
     pub max_workers: u32,
+    /// Bearer token the orchestrator must send to start or stop workers.
+    pub token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +41,9 @@ impl Config {
 
     pub fn parse(text: &str) -> anyhow::Result<Config> {
         let config: Config = toml::from_str(text)?;
+        if config.provider.token.is_empty() {
+            bail!("provider.token must not be empty");
+        }
         if config.agents.is_empty() {
             bail!("agents: at least one agent is required");
         }
@@ -61,6 +66,7 @@ mod tests {
     fn parses_example() {
         let c = Config::parse(EXAMPLE).unwrap();
         assert_eq!(c.provider.max_workers, 4);
+        assert_eq!(c.provider.token, "change-me");
         let agent = &c.agents["claude-code"];
         assert_eq!(agent.image, "software-factory/worker:latest");
         assert_eq!((agent.models.as_slice(), agent.default_model.as_str()), (["sonnet".to_string(), "opus".to_string()].as_slice(), "sonnet"));
@@ -70,6 +76,7 @@ mod tests {
     #[test]
     fn rejects_invalid() {
         assert!(Config::parse("").is_err());
+        assert!(Config::parse(&EXAMPLE.replace("token = \"change-me\"", "token = \"\"")).is_err());
         assert!(Config::parse(&format!("{EXAMPLE}\n[typo]\nx = 1\n")).is_err());
         assert!(Config::parse(&EXAMPLE.replace("default_model = \"sonnet\"", "default_model = \"haiku\"")).is_err());
         assert!(Config::parse(&EXAMPLE.replace("[agents.claude-code]", "[agents.claude-code]\nbogus = 1")).is_err());

@@ -176,7 +176,7 @@ A separate process. The orchestrator connects to each configured provider at its
 
 A provider is configured with the agents it can run: for each, an image, the models it supports and the default among them. It advertises agents and models in `/status`; the orchestrator validates tickets and routes work against the union of what providers advertise. To pin work to an account, give that account's provider an agent name no other provider advertises.
 
-REST API the orchestrator calls:
+REST API the orchestrator calls. `POST` and `DELETE` require the provider's token as a bearer header; the orchestrator holds it as `providers.<name>.token`. `GET /status` is open.
 
 - `POST /workers`: body `{ worker_id, agent, orchestrator_url, worker_token }`. Starts a worker of that agent; 400 for an agent the provider does not advertise. The provider maps `worker_id` to its own handle (container id, pod name) internally.
 - `DELETE /workers/{id}`: stops a worker.
@@ -242,9 +242,11 @@ max_workers = 4
 
 [providers.local]
 url = "http://localhost:8081"
+token = "change-me"   # must match that provider's [provider] token
 
 [providers.team-b]
 url = "http://team-b:8081"
+token = "change-me-too"
 
 [agents.claude-code]
 run_timeout = "1h"
@@ -271,6 +273,7 @@ Each provider has its own config file. The Docker provider's:
 [provider]
 listen = "0.0.0.0:8081"
 max_workers = 4
+token = "change-me"
 
 [agents.claude-code]
 image = "software-factory/worker:latest"

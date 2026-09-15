@@ -44,22 +44,23 @@ pub struct Status {
 #[derive(Clone)]
 pub struct Provider {
     url: String,
+    token: String,
     http: reqwest::Client,
 }
 
 impl Provider {
-    pub fn new(url: &str) -> Provider {
-        Provider { url: url.trim_end_matches('/').to_string(), http: reqwest::Client::new() }
+    pub fn new(url: &str, token: &str) -> Provider {
+        Provider { url: url.trim_end_matches('/').to_string(), token: token.to_string(), http: reqwest::Client::new() }
     }
 
     pub async fn start(&self, req: &StartWorker) -> anyhow::Result<()> {
-        let resp = self.http.post(format!("{}/workers", self.url)).json(req).send().await.context("provider start")?;
+        let resp = self.http.post(format!("{}/workers", self.url)).bearer_auth(&self.token).json(req).send().await.context("provider start")?;
         check(resp).await.map(|_| ())
     }
 
     /// Stops a worker; one the provider no longer knows counts as stopped.
     pub async fn stop(&self, worker_id: &str) -> anyhow::Result<()> {
-        let resp = self.http.delete(format!("{}/workers/{worker_id}", self.url)).send().await.context("provider stop")?;
+        let resp = self.http.delete(format!("{}/workers/{worker_id}", self.url)).bearer_auth(&self.token).send().await.context("provider stop")?;
         if resp.status() == StatusCode::NOT_FOUND {
             return Ok(());
         }
@@ -81,7 +82,7 @@ pub struct Providers {
 
 impl Providers {
     pub fn new(config: &Config) -> Providers {
-        let clients = config.providers.iter().map(|(name, p)| (name.clone(), Provider::new(&p.url))).collect();
+        let clients = config.providers.iter().map(|(name, p)| (name.clone(), Provider::new(&p.url, &p.token))).collect();
         Providers { clients, statuses: RwLock::new(BTreeMap::new()) }
     }
 

@@ -30,6 +30,7 @@ async fn config_is_served_without_the_token() {
     assert_eq!(c["orchestrator"]["heartbeat_timeout"], "1m");
     assert_eq!(c["providers"]["local"]["url"], "http://localhost:8081");
     assert!(c["orchestrator"].get("token").is_none());
+    assert!(c["providers"]["local"].get("token").is_none(), "provider tokens are secrets too");
 }
 
 #[tokio::test]

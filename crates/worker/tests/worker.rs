@@ -22,6 +22,7 @@ heartbeat_timeout = "60s"
 max_workers = 4
 [providers.local]
 url = "http://localhost:8081"
+token = "p"
 [agents.command]
 run_timeout = "1s"
 [prompts]
