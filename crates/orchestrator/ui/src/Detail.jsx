@@ -5,7 +5,7 @@ import { ACTIONS, STATES, ago, isHttp, markdown, usageLine } from "./format.js";
 import { LogPane } from "./Log.jsx";
 import { Header } from "./Header.jsx";
 
-const FIELDS = ["title", "state", "description", "links"];
+const FIELDS = ["title", "state", "description", "links", "agent", "model"];
 const same = (a, b) => FIELDS.every(k => a[k] === b[k]);
 
 // Detail pane for one ticket (remounted per ticket via key). The form follows the server while untouched;
@@ -13,8 +13,8 @@ const same = (a, b) => FIELDS.every(k => a[k] === b[k]);
 export function Detail({ ticket: t, usage, run }) {
   const { refresh, select } = useApp();
   const busy = useBusy();
-  const server = useMemo(() => ({ title: t.title, state: t.state, description: t.description, links: t.links.join("\n") }),
-                         [t.title, t.state, t.description, t.links]);
+  const server = useMemo(() => ({ title: t.title, state: t.state, description: t.description, links: t.links.join("\n"), agent: t.agent ?? "", model: t.model ?? "" }),
+                         [t.title, t.state, t.description, t.links, t.agent, t.model]);
   const [values, setValues] = useState(server);
   const [loaded, setLoaded] = useState(server); // what the form was last filled with
   const fill = v => { setValues(v); setLoaded(v); };
@@ -27,7 +27,8 @@ export function Detail({ ticket: t, usage, run }) {
   useEffect(() => () => clearTimeout(savedTimer.current), []);
   const save = busy(async e => {
     e.preventDefault();
-    await patch(t.id, { ...values, links: values.links.split("\n").map(l => l.trim()).filter(Boolean) });
+    // An empty agent or model clears it (null); the server treats an omitted field as untouched.
+    await patch(t.id, { ...values, links: values.links.split("\n").map(l => l.trim()).filter(Boolean), agent: values.agent.trim() || null, model: values.model.trim() || null });
     await refresh();
     setSaved(true);
     clearTimeout(savedTimer.current);
@@ -48,6 +49,7 @@ export function Detail({ ticket: t, usage, run }) {
         <div class="notice" hidden={same(server, loaded)}>Ticket changed on the server. <button type="button" onClick={() => fill(server)}>Reload</button></div>
         <input name="title" required value={values.title} onInput={set} />
         <select name="state" value={values.state} onChange={set}>{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+        <div class="pair"><input name="agent" placeholder="Agent (any)" value={values.agent} onInput={set} /><input name="model" placeholder="Model (default)" value={values.model} onInput={set} /></div>
         <textarea name="description" rows={10} value={values.description} onInput={set} />
         <textarea name="links" rows={3} placeholder="Links, one per line" value={values.links} onInput={set} />
         <div class="row"><span class="saved" hidden={!saved}>Saved</span><button class="primary">Save</button></div>
@@ -122,7 +124,7 @@ function Runs({ ticket: t, run }) {
       {t.runs.length === 0 && <p class="empty">No runs yet</p>}
       {t.runs.map(r => (
         <div key={r.id} class={"run" + (r.id === run ? " selected" : "")}>
-          <a href={`#/tickets/${t.id}/runs/${r.id}`} onClick={r.id === run ? toggle : undefined}>run {r.id}</a><span>{r.worker_id}</span>
+          <a href={`#/tickets/${t.id}/runs/${r.id}`} onClick={r.id === run ? toggle : undefined}>run {r.id}</a><span>{r.worker_id}</span>{r.model && <span class="tag">{r.model}</span>}
           <span title={r.started_at}>{ago(r.started_at)}</span><span class="tag">{r.ended_at ? "ended" : "running"}</span>
         </div>
       ))}

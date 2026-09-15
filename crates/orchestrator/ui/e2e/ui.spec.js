@@ -39,15 +39,18 @@ const card = (page, id) => page.locator(`.card[data-id="${id}"]`);
 const create = (server, title) => server.api("/tickets", { method: "POST", body: { title } });
 const ids = async (server, ...want) => (await server.api("/tickets")).map(t => t.id).filter(id => want.includes(id));
 
-test("creates a ticket from the dialog", async ({ page }) => {
+test("creates a ticket from the dialog", async ({ page, server }) => {
   await page.goto("/");
   await page.click("button:text-is('New ticket')");
   await expect(page.locator("#create")).toBeVisible();
   await page.fill("#create input[name=title]", "Created in browser");
   await page.selectOption("#create select[name=state]", "ready");
+  await page.fill("#create input[name=agent]", "codex");
   await page.click("#create button:text-is('Create ticket')");
   await expect(page.locator("#create")).toBeHidden();
   await expect(page.locator(".column.ready .card", { hasText: "Created in browser" })).toBeVisible();
+  const created = (await server.api("/tickets")).find(t => t.title === "Created in browser");
+  expect([created.agent, created.model]).toEqual(["codex", null]);
   await expect(page).toHaveURL(/\/$/);
   await page.click("button:text-is('New ticket')");
   await page.keyboard.press("Escape");
@@ -77,9 +80,15 @@ test("edits title and state from the form and the Mark ready action", async ({ p
   await page.goto(`/#/tickets/${t.id}`);
   await page.fill("#detail input[name=title]", "Edited");
   await page.selectOption("#detail select[name=state]", "in_review");
+  await page.fill("#detail input[name=agent]", "claude-code");
+  await page.fill("#detail input[name=model]", "opus");
   await page.click("#detail button:text-is('Save')");
   await expect(page.locator("#detail .saved")).toHaveText("Saved");
   await expect(page.locator(".column.in_review .card", { hasText: "Edited" })).toBeVisible();
+  expect(await server.api(`/tickets/${t.id}`)).toMatchObject({ agent: "claude-code", model: "opus" });
+  await page.fill("#detail input[name=model]", "");
+  await page.click("#detail button:text-is('Save')");
+  await expect.poll(async () => (await server.api(`/tickets/${t.id}`)).model).toBe(null);
   await page.click("#actions button:text-is('Back to todo')");
   await expect(page.locator(".column.todo .card", { hasText: "Edited" })).toBeVisible();
   await page.click("#actions button:text-is('Mark ready')");

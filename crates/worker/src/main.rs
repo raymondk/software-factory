@@ -24,6 +24,8 @@ struct Worker {
     token: String,
     workspace: PathBuf,
     poll_interval: Duration,
+    /// The provider's default model for this agent, used when the ticket sets none.
+    model: Option<String>,
     log: Log,
 }
 
@@ -67,6 +69,7 @@ async fn run() -> anyhow::Result<ExitCode> {
     let heartbeat_interval = duration("FACTORY_HEARTBEAT_INTERVAL", "10s")?;
     let poll_interval = duration("FACTORY_POLL_INTERVAL", "5s")?;
     let agent = std::env::var("FACTORY_AGENT").unwrap_or_else(|_| "command".into());
+    let model = std::env::var("FACTORY_MODEL").ok().filter(|m| !m.is_empty());
     let shipping = Shipping {
         interval: duration("FACTORY_LOG_INTERVAL", "1s")?,
         batch: number("FACTORY_LOG_BATCH", 100)?,
@@ -78,7 +81,7 @@ async fn run() -> anyhow::Result<ExitCode> {
         other => bail!("unknown FACTORY_AGENT {other:?}"),
     };
     let log = Log::start(Client::new(&url, &token), id.clone(), shipping);
-    let worker = Arc::new(Worker { client: Client::new(&url, &token), id, url, token, workspace, poll_interval, log });
+    let worker = Arc::new(Worker { client: Client::new(&url, &token), id, url, token, workspace, poll_interval, model, log });
     worker.log.line(format!("worker {} (agent {agent}) starting; workspace {}", worker.id, worker.workspace.display()));
     let result = match command {
         Some(command) => worker.serve(&CommandAdapter { command }, heartbeat_interval).await,
@@ -181,10 +184,14 @@ impl Worker {
             return Ok(None);
         };
         let ticket = job.ticket.id;
+        let model = job.model.as_deref().or(self.model.as_deref());
         self.log.set_run(Some(job.run));
-        self.log.line(format!("worker {}: ticket #{ticket} ({}), run {}: {}", self.id, job.ticket.state, job.run, job.ticket.title));
+        self.log.line(format!(
+            "worker {}: ticket #{ticket} ({}), run {}, model {}: {}",
+            self.id, job.ticket.state, job.run, model.unwrap_or("default"), job.ticket.title
+        ));
         let result = match self.prepare(ticket, &job.repos) {
-            Ok(env) => adapter.run(&job.prompt, &self.workspace, job.run_timeout, &env, &self.log).await,
+            Ok(env) => adapter.run(&job.prompt, model, &self.workspace, job.run_timeout, &env, &self.log).await,
             Err(e) => Err(e),
         };
         let (outcome, usage) = result.unwrap_or_else(|e| {
@@ -194,7 +201,7 @@ impl Worker {
             "worker {}: ticket #{ticket}: {} (success {}, links {:?}; {} in, {} out, ${:.4})",
             self.id, outcome.summary, outcome.success, outcome.links, usage.tokens_in, usage.tokens_out, usage.cost
         ));
-        let report = ReportUsage { ticket_id: ticket, tokens_in: usage.tokens_in, tokens_out: usage.tokens_out, cost: usage.cost };
+        let report = ReportUsage { ticket_id: ticket, tokens_in: usage.tokens_in, tokens_out: usage.tokens_out, cost: usage.cost, model: model.map(str::to_owned) };
         // The usage report ends the run on the orchestrator; lines from here on belong to no run.
         self.call("report usage", || self.client.report_usage(&self.id, &report)).await?;
         self.log.set_run(None);

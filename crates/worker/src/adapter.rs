@@ -30,21 +30,25 @@ pub struct Usage {
 }
 
 pub trait Adapter {
-    /// Runs the agent on `prompt` in `workspace`, killing it after `timeout`. `env` is extra environment for the agent
-    /// process: orchestrator URL and token, worker and ticket ids, git credentials. Every line the agent prints goes to `log`.
-    async fn run(&self, prompt: &str, workspace: &Path, timeout: Duration, env: &[(String, String)], log: &Log) -> anyhow::Result<(Outcome, Usage)>;
+    /// Runs the agent on `prompt` in `workspace` with `model` (the agent's own default when `None`), killing it after
+    /// `timeout`. `env` is extra environment for the agent process: orchestrator URL and token, worker and ticket ids,
+    /// git credentials. Every line the agent prints goes to `log`.
+    async fn run(&self, prompt: &str, model: Option<&str>, workspace: &Path, timeout: Duration, env: &[(String, String)], log: &Log) -> anyhow::Result<(Outcome, Usage)>;
 }
 
-/// Runs a program with the prompt on stdin and in `PROMPT`. Usage is an optional JSON object on the last line of
-/// stdout: `{"tokens_in":..,"tokens_out":..,"cost":..}`.
+/// Runs a program with the prompt on stdin and in `PROMPT`, and the model, if any, in `MODEL`. Usage is an optional
+/// JSON object on the last line of stdout: `{"tokens_in":..,"tokens_out":..,"cost":..}`.
 pub struct CommandAdapter {
     pub command: String,
 }
 
 impl Adapter for CommandAdapter {
-    async fn run(&self, prompt: &str, workspace: &Path, timeout: Duration, env: &[(String, String)], log: &Log) -> anyhow::Result<(Outcome, Usage)> {
+    async fn run(&self, prompt: &str, model: Option<&str>, workspace: &Path, timeout: Duration, env: &[(String, String)], log: &Log) -> anyhow::Result<(Outcome, Usage)> {
         let mut cmd = Command::new(&self.command);
         cmd.current_dir(workspace).env("PROMPT", prompt).envs(env.iter().map(|(k, v)| (k, v)));
+        if let Some(model) = model {
+            cmd.env("MODEL", model);
+        }
         let (outcome, last) = run(cmd, prompt, timeout, log).await?;
         Ok((outcome, serde_json::from_str(&last).unwrap_or_default()))
     }
@@ -78,9 +82,12 @@ struct ClaudeUsage {
 }
 
 impl Adapter for ClaudeCodeAdapter {
-    async fn run(&self, prompt: &str, workspace: &Path, timeout: Duration, env: &[(String, String)], log: &Log) -> anyhow::Result<(Outcome, Usage)> {
+    async fn run(&self, prompt: &str, model: Option<&str>, workspace: &Path, timeout: Duration, env: &[(String, String)], log: &Log) -> anyhow::Result<(Outcome, Usage)> {
         let mut cmd = Command::new(&self.bin);
         cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]).current_dir(workspace).envs(env.iter().map(|(k, v)| (k, v)));
+        if let Some(model) = model {
+            cmd.args(["--model", model]);
+        }
         let (outcome, last) = run(cmd, prompt, timeout, log).await?;
         let r: ClaudeResult = serde_json::from_str(&last).unwrap_or_default();
         let u = r.usage;
@@ -176,9 +183,9 @@ mod tests {
         // SAFETY: tests here run single-threaded per process; the value is only read by the spawned child.
         unsafe { std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "oauth-1") };
         let env = vec![("FACTORY_TICKET".to_string(), "7".to_string())];
-        let (outcome, usage) = shim("ok").run("do #7", dir.path(), Duration::from_secs(10), &env, &Log::stderr()).await.unwrap();
+        let (outcome, usage) = shim("ok").run("do #7", Some("opus"), dir.path(), Duration::from_secs(10), &env, &Log::stderr()).await.unwrap();
         assert!(outcome.success && !outcome.timed_out);
-        assert_eq!(std::fs::read_to_string(dir.path().join("argv.txt")).unwrap(), "-p --output-format stream-json --verbose --dangerously-skip-permissions");
+        assert_eq!(std::fs::read_to_string(dir.path().join("argv.txt")).unwrap(), "-p --output-format stream-json --verbose --dangerously-skip-permissions --model opus");
         assert_eq!(std::fs::read_to_string(dir.path().join("stdin.txt")).unwrap(), "do #7");
         assert_eq!(std::fs::read_to_string(dir.path().join("env.txt")).unwrap(), "7|oauth-1");
         assert_eq!((usage.tokens_in, usage.tokens_out, usage.cost), (2 + 10745 + 10480, 4, 0.218687));
@@ -187,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn claude_code_tolerates_missing_usage() {
         let dir = tempfile::tempdir().unwrap();
-        let (outcome, usage) = shim("bare").run("x", dir.path(), Duration::from_secs(10), &[], &Log::stderr()).await.unwrap();
+        let (outcome, usage) = shim("bare").run("x", None, dir.path(), Duration::from_secs(10), &[], &Log::stderr()).await.unwrap();
         assert!(!outcome.success);
         assert_eq!((usage.tokens_in, usage.tokens_out, usage.cost), (0, 0, 0.0));
     }
@@ -195,7 +202,7 @@ mod tests {
     #[tokio::test]
     async fn claude_code_timeout_kills_the_process_group() {
         let dir = tempfile::tempdir().unwrap();
-        let (outcome, usage) = shim("hang").run("x", dir.path(), Duration::from_millis(300), &[], &Log::stderr()).await.unwrap();
+        let (outcome, usage) = shim("hang").run("x", None, dir.path(), Duration::from_millis(300), &[], &Log::stderr()).await.unwrap();
         assert!(outcome.timed_out && !outcome.success);
         assert_eq!(usage.tokens_in, 0);
         let pid = std::fs::read_to_string(dir.path().join("child.pid")).unwrap().trim().to_string();

@@ -22,6 +22,12 @@ pub struct Ticket {
     /// A `ready` ticket with an unfinished dependency; never handed to a worker.
     #[serde(default)]
     pub blocked: bool,
+    /// Only workers of this agent may pick the ticket up; unset means any.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// Overrides the provider's default model for the agent.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Agent runs on this ticket, newest first. Like `comments`, only `GET /tickets/{id}` fills this in.
     #[serde(default)]
     pub runs: Vec<Run>,
@@ -55,6 +61,9 @@ pub struct Run {
     pub worker_id: String,
     /// The agent the worker runs.
     pub agent: String,
+    /// The model it ran with, recorded by the usage report that ended the run.
+    #[serde(default)]
+    pub model: Option<String>,
     pub started_at: String,
     pub ended_at: Option<String>,
 }
@@ -96,7 +105,7 @@ pub struct CreateComment {
     pub body: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreateTicket {
     pub title: String,
     #[serde(default)]
@@ -104,9 +113,13 @@ pub struct CreateTicket {
     /// Defaults to `todo`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
-/// Partial update. `None` leaves a field untouched; `assignee: Some(None)` clears it.
+/// Partial update. `None` leaves a field untouched; `assignee`, `agent` and `model` as `Some(None)` clear it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateTicket {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,6 +132,10 @@ pub struct UpdateTicket {
     pub assignee: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub agent: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub model: Option<Option<String>>,
 }
 
 /// Distinguishes a present-but-null field (`Some(None)`) from an omitted one (`None`).
@@ -180,6 +197,9 @@ pub struct PollResponse {
     /// The run this hand-out opened; ended by the worker's usage report.
     pub run: i64,
     pub prompt: String,
+    /// The ticket's model; the worker falls back to its provider's default when null.
+    #[serde(default)]
+    pub model: Option<String>,
     pub repos: Vec<String>,
     /// The agent's `run_timeout`, e.g. "1h".
     #[serde(with = "humantime_serde")]
@@ -193,6 +213,9 @@ pub struct Usage {
     pub ticket_id: i64,
     pub worker_id: String,
     pub agent: String,
+    /// The model the agent ran with, as reported by the worker.
+    #[serde(default)]
+    pub model: Option<String>,
     pub tokens_in: i64,
     pub tokens_out: i64,
     pub cost: f64,
@@ -205,6 +228,9 @@ pub struct ReportUsage {
     pub tokens_in: i64,
     pub tokens_out: i64,
     pub cost: f64,
+    /// The model the agent ran with; also recorded on the run this report ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -216,8 +242,8 @@ pub struct Totals {
     pub tickets_failed: i64,
 }
 
-/// Totals under one key: a ticket id, worker id, or agent. Serializes flat, with the key as `ticket_id`,
-/// `worker_id`, or `agent`.
+/// Totals under one key: a ticket id, worker id, agent or model. Serializes flat, with the key as `ticket_id`,
+/// `worker_id`, `agent` or `model`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Breakdown<K> {
     #[serde(flatten)]
@@ -241,6 +267,12 @@ pub struct AgentKey {
     pub agent: String,
 }
 
+/// `model` is null for usage reported without one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelKey {
+    pub model: Option<String>,
+}
+
 /// Completed and failed counts derive from ticket states `done` and `failed`. Totals count all such tickets; a
 /// breakdown counts the distinct ones with a usage record under its key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +281,7 @@ pub struct Metrics {
     pub per_ticket: Vec<Breakdown<TicketKey>>,
     pub per_worker: Vec<Breakdown<WorkerKey>>,
     pub per_agent: Vec<Breakdown<AgentKey>>,
+    pub per_model: Vec<Breakdown<ModelKey>>,
 }
 
 #[derive(Debug, thiserror::Error)]

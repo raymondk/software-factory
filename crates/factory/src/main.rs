@@ -29,7 +29,7 @@ enum Command {
         #[command(subcommand)]
         command: WorkerCommand,
     },
-    /// Print usage totals and breakdowns per ticket, worker, and agent
+    /// Print usage totals and breakdowns per ticket, worker, agent, and model
     Metrics,
 }
 
@@ -67,6 +67,9 @@ enum WorkerCommand {
         /// Dollars
         #[arg(long)]
         cost: f64,
+        /// The model the agent ran with
+        #[arg(long)]
+        model: Option<String>,
     },
 }
 
@@ -81,6 +84,12 @@ enum TicketCommand {
         /// Initial state (default todo)
         #[arg(long)]
         state: Option<String>,
+        /// Only workers of this agent may pick the ticket up
+        #[arg(long)]
+        agent: Option<String>,
+        /// Model the agent runs with, instead of the provider's default
+        #[arg(long)]
+        model: Option<String>,
     },
     /// List tickets in rank order
     List {
@@ -108,6 +117,14 @@ enum TicketCommand {
         /// Append a link; repeatable
         #[arg(long = "add-link", value_name = "URL")]
         add_link: Vec<String>,
+        #[arg(long, conflicts_with = "clear_agent")]
+        agent: Option<String>,
+        #[arg(long)]
+        clear_agent: bool,
+        #[arg(long, conflicts_with = "clear_model")]
+        model: Option<String>,
+        #[arg(long)]
+        clear_model: bool,
     },
     /// Move a ticket before or after another
     Move {
@@ -164,8 +181,8 @@ async fn main() -> anyhow::Result<()> {
     let client = Client::new(cli.url, token);
     match cli.command {
         Command::Ticket { command } => match command {
-            TicketCommand::Create { title, description, state } => {
-                print(&client.create_ticket(&CreateTicket { title, description, state }).await?)
+            TicketCommand::Create { title, description, state, agent, model } => {
+                print(&client.create_ticket(&CreateTicket { title, description, state, agent, model }).await?)
             }
             TicketCommand::List { state, assignee } => {
                 for t in client.list_tickets(&ListTickets { state, assignee }).await? {
@@ -173,7 +190,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             TicketCommand::View { id } => print(&client.get_ticket(id).await?),
-            TicketCommand::Edit { id, title, description, state, assignee, clear_assignee, add_link } => {
+            TicketCommand::Edit { id, title, description, state, assignee, clear_assignee, add_link, agent, clear_agent, model, clear_model } => {
                 let links = if add_link.is_empty() {
                     None
                 } else {
@@ -182,7 +199,9 @@ async fn main() -> anyhow::Result<()> {
                     Some(links)
                 };
                 let assignee = if clear_assignee { Some(None) } else { assignee.map(Some) };
-                print(&client.update_ticket(id, &UpdateTicket { title, description, state, assignee, links }).await?)
+                let agent = if clear_agent { Some(None) } else { agent.map(Some) };
+                let model = if clear_model { Some(None) } else { model.map(Some) };
+                print(&client.update_ticket(id, &UpdateTicket { title, description, state, assignee, links, agent, model }).await?)
             }
             TicketCommand::Move { id, before, after } => print(&client.move_ticket(id, &MoveTicket { before, after }).await?),
             TicketCommand::Link { id, depends_on, related_to } => {
@@ -238,8 +257,8 @@ async fn main() -> anyhow::Result<()> {
             WorkerCommand::Register { id } => print(&client.register(&id).await?),
             WorkerCommand::Heartbeat { id } => print(&client.heartbeat(&id).await?),
             WorkerCommand::Poll { id } => print(&client.poll(&id, None).await?),
-            WorkerCommand::Usage { id, ticket, tokens_in, tokens_out, cost } => {
-                print(&client.report_usage(&id, &ReportUsage { ticket_id: ticket, tokens_in, tokens_out, cost }).await?)
+            WorkerCommand::Usage { id, ticket, tokens_in, tokens_out, cost, model } => {
+                print(&client.report_usage(&id, &ReportUsage { ticket_id: ticket, tokens_in, tokens_out, cost, model }).await?)
             }
         },
         Command::Metrics => {
@@ -249,6 +268,7 @@ async fn main() -> anyhow::Result<()> {
             m.per_ticket.iter().for_each(|b: &Breakdown<_>| print_totals("ticket", &format!("#{}", b.key.ticket_id), &b.totals));
             m.per_worker.iter().for_each(|b| print_totals("worker", &b.key.worker_id, &b.totals));
             m.per_agent.iter().for_each(|b| print_totals("agent", &b.key.agent, &b.totals));
+            m.per_model.iter().for_each(|b| print_totals("model", b.key.model.as_deref().unwrap_or("-"), &b.totals));
         }
     }
     Ok(())

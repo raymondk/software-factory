@@ -35,6 +35,9 @@ td, th { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--
 form { display: grid; gap: .5rem; margin-bottom: 1rem; }
 /* Form submit buttons sit in a row aligned to the right, at the same pill size as every other button. */
 .row { display: flex; gap: .75rem; align-items: center; justify-content: flex-end; }
+/* Two short fields side by side (agent and model). */
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+#metrics-models td:not(:first-child) { font: 13px var(--mono); }
 .saved { color: var(--icp-fg-secondary); font-size: 13px; }
 #toolbar { margin-bottom: 1rem; }
 /* Dialogs: a fixed header (kind, title, close icon) over a body that scrolls on its own. */

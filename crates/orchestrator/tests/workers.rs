@@ -46,7 +46,7 @@ async fn worker(url: &str, human: &Client, agent: &str) -> (NewWorker, Client) {
 }
 
 async fn ticket(human: &Client, title: &str, state: &str) -> i64 {
-    let t = human.create_ticket(&CreateTicket { title: title.into(), description: format!("about {title}"), state: None }).await.unwrap();
+    let t = human.create_ticket(&CreateTicket { title: title.into(), description: format!("about {title}"), ..Default::default() }).await.unwrap();
     human.update_ticket(t.id, &UpdateTicket { state: Some(state.into()), ..Default::default() }).await.unwrap();
     t.id
 }
@@ -151,6 +151,42 @@ async fn poll_takes_lowest_ranked_available() {
     let again = ticket(&human, "again", "ready").await;
     let p = cc.poll(&c.id, None).await.unwrap().expect("a ticket");
     assert_eq!((p.ticket.id, p.run_timeout), (again, std::time::Duration::from_secs(7200)));
+}
+
+#[tokio::test]
+async fn poll_filters_by_agent_and_carries_the_model() {
+    let (url, _dir) = serve().await;
+    let human = Client::new(&url, TOKEN);
+    let (w, wc) = worker(&url, &human, "claude-code").await;
+    let (c, cc) = worker(&url, &human, "codex").await;
+    let pinned = ticket(&human, "for codex", "ready").await;
+    human.update_ticket(pinned, &UpdateTicket { agent: Some(Some("codex".into())), model: Some(Some("o3".into())), ..Default::default() }).await.unwrap();
+    let any = ticket(&human, "anyone", "ready").await;
+    let pinned_no_model = ticket(&human, "for claude", "ready").await;
+    human.update_ticket(pinned_no_model, &UpdateTicket { agent: Some(Some("claude-code".into())), ..Default::default() }).await.unwrap();
+
+    // The first ticket in rank order is pinned to codex, so the claude-code worker skips it.
+    let p = wc.poll(&w.id, None).await.unwrap().expect("a ticket");
+    assert_eq!((p.ticket.id, p.model), (any, None));
+    let p = wc.poll(&w.id, None).await.unwrap().expect("a ticket");
+    assert_eq!((p.ticket.id, p.model), (pinned_no_model, None));
+    assert!(wc.poll(&w.id, None).await.unwrap().is_none());
+    assert_eq!(human.get_ticket(pinned).await.unwrap().assignee, None);
+
+    // The codex worker gets it, with the model.
+    let p = cc.poll(&c.id, None).await.unwrap().expect("a ticket");
+    assert_eq!((p.ticket.id, p.model.as_deref()), (pinned, Some("o3")));
+    assert!(cc.poll(&c.id, None).await.unwrap().is_none());
+
+    // The usage report records the model on the run and the usage, and metrics break it down.
+    cc.report_usage(&c.id, &ReportUsage { model: Some("o3".into()), ..usage(pinned, 10, 1, 0.1) }).await.unwrap();
+    let u = wc.report_usage(&w.id, &usage(any, 5, 1, 0.05)).await.unwrap();
+    assert_eq!(u.model, None);
+    let runs = human.get_ticket(pinned).await.unwrap().runs;
+    assert_eq!((runs[0].model.as_deref(), runs[0].ended_at.is_some()), (Some("o3"), true));
+    assert_eq!(human.get_ticket(any).await.unwrap().runs[0].model, None);
+    let per_model: Vec<_> = human.metrics().await.unwrap().per_model.into_iter().map(|b| (b.key.model, b.totals.tokens_in)).collect();
+    assert_eq!(per_model, [(None, 5), (Some("o3".into()), 10)]);
 }
 
 fn lines(run: Option<i64>, lines: &[&str]) -> ShipLogs {
@@ -310,7 +346,7 @@ async fn acl_workers_modify_only_held_tickets() {
     assert_eq!(wc.move_ticket(mine, &MoveTicket { after: Some(theirs), ..Default::default() }).await.unwrap().rank, 3.0);
 
     // Anyone may create tickets and comment on and resolve comments on any ticket; author is the worker id.
-    let created = oc.create_ticket(&CreateTicket { title: "from worker".into(), description: String::new(), state: None }).await.unwrap();
+    let created = oc.create_ticket(&CreateTicket { title: "from worker".into(), ..Default::default() }).await.unwrap();
     assert_eq!(created.state, "todo");
     let c = oc.add_comment(mine, &CreateComment { body: "hi".into() }).await.unwrap();
     assert_eq!(c.author, other.id);
@@ -423,7 +459,7 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
 }
 
 fn usage(ticket_id: i64, tokens_in: i64, tokens_out: i64, cost: f64) -> ReportUsage {
-    ReportUsage { ticket_id, tokens_in, tokens_out, cost }
+    ReportUsage { ticket_id, tokens_in, tokens_out, cost, model: None }
 }
 
 fn totals(t: &Totals) -> (i64, i64, f64, i64, i64) {

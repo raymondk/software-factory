@@ -1,6 +1,6 @@
 use api_client::{
     Breakdown, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, LogLine, LogsAfter, Metrics, MoveTicket, NewWorker, PollRequest,
-    PollResponse, Relation, ReportUsage, Run, ShipLogs, Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, AgentKey,
+    ModelKey, PollResponse, Relation, ReportUsage, Run, ShipLogs, Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, AgentKey,
 };
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
@@ -103,6 +103,8 @@ struct Row {
     created_at: String,
     updated_at: String,
     links: String,
+    agent: Option<String>,
+    model: Option<String>,
     #[sqlx(default)]
     unresolved_comments: i64,
     #[sqlx(default)]
@@ -125,6 +127,8 @@ impl From<Row> for Ticket {
             unresolved_comments: r.unresolved_comments,
             relations: vec![],
             blocked: r.blocked,
+            agent: r.agent,
+            model: r.model,
             runs: vec![],
         }
     }
@@ -146,8 +150,8 @@ impl From<CommentRow> for Comment {
     }
 }
 
-const COLUMNS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links";
-const COLUMNS_WITH_COMMENTS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links, \
+const COLUMNS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links, agent, model";
+const COLUMNS_WITH_COMMENTS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links, agent, model, \
     (SELECT COUNT(*) FROM comments c WHERE c.ticket_id = tickets.id AND NOT c.resolved) AS unresolved_comments";
 const COMMENT_COLUMNS: &str = "id, ticket_id, author, body, created_at, resolved";
 /// Spec 3.7: a `ready` ticket with a dependency that is not yet `in_review` or `done`. Evaluated against `tickets`.
@@ -165,13 +169,15 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
         return Err(ApiError::BadRequest("invalid state"));
     }
     let row: Row = sqlx::query_as(&format!(
-        "INSERT INTO tickets (title, description, state, rank, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(rank), 0) + 1 FROM tickets), {NOW}, {NOW}) \
+        "INSERT INTO tickets (title, description, state, rank, created_at, updated_at, agent, model) \
+         VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(rank), 0) + 1 FROM tickets), {NOW}, {NOW}, ?4, ?5) \
          RETURNING {COLUMNS}"
     ))
     .bind(&req.title)
     .bind(&req.description)
     .bind(state_name)
+    .bind(&req.agent)
+    .bind(&req.model)
     .fetch_one(&state.pool)
     .await?;
     Ok((StatusCode::CREATED, Json(row.into())))
@@ -212,6 +218,7 @@ async fn full_ticket(state: &AppState, id: i64) -> Result<Ticket, ApiError> {
         .into_iter()
         .map(|r| Run {
             agent: r.agent,
+            model: r.model,
             id: r.id,
             ticket_id: r.ticket_id,
             worker_id: r.worker_id,
@@ -228,11 +235,12 @@ struct RunRow {
     ticket_id: i64,
     worker_id: String,
     agent: String,
+    model: Option<String>,
     started_at: String,
     ended_at: Option<String>,
 }
 
-const RUN_COLUMNS: &str = "r.id, r.ticket_id, r.worker_id, w.agent, r.started_at, r.ended_at";
+const RUN_COLUMNS: &str = "r.id, r.ticket_id, r.worker_id, w.agent, r.model, r.started_at, r.ended_at";
 
 async fn comments_of(state: &AppState, ticket_id: i64) -> Result<Vec<Comment>, ApiError> {
     let rows: Vec<CommentRow> =
@@ -419,7 +427,8 @@ async fn update_ticket(
         "UPDATE tickets SET title = COALESCE(?2, title), description = COALESCE(?3, description), \
          state = COALESCE(?4, state), \
          assignee = CASE WHEN ?5 THEN ?6 WHEN ?4 IS NOT NULL AND ?4 != state AND NOT ?8 THEN NULL ELSE assignee END, \
-         links = COALESCE(?7, links), updated_at = {NOW} WHERE id = ?1 RETURNING {COLUMNS}"
+         links = COALESCE(?7, links), agent = CASE WHEN ?9 THEN ?10 ELSE agent END, model = CASE WHEN ?11 THEN ?12 ELSE model END, \
+         updated_at = {NOW} WHERE id = ?1 RETURNING {COLUMNS}"
     ))
     .bind(id)
     .bind(&req.title)
@@ -429,6 +438,10 @@ async fn update_ticket(
     .bind(req.assignee.clone().flatten())
     .bind(req.links.as_ref().map(|l| serde_json::to_string(l).unwrap()))
     .bind(keep)
+    .bind(req.agent.is_some())
+    .bind(req.agent.clone().flatten())
+    .bind(req.model.is_some())
+    .bind(req.model.clone().flatten())
     .fetch_optional(&state.pool)
     .await?;
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
@@ -567,7 +580,8 @@ async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<C
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
 }
 
-/// Hands the worker the lowest-ranked unassigned, unblocked ticket in a state that has a prompt. 204 when there is none.
+/// Hands the worker the lowest-ranked unassigned, unblocked ticket in a state that has a prompt, whose `agent` is unset
+/// or the worker's. 204 when there is none.
 async fn poll(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -579,20 +593,22 @@ async fn poll(
     let mut conn = state.pool.acquire().await?;
     // IMMEDIATE serializes polls so two workers never pick the same ticket.
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
-    let (agent,): (String,) =
+    let (agent_name,): (String,) =
         sqlx::query_as("SELECT agent FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
-    let agent = state.config.agents.get(&agent).ok_or(ApiError::BadRequest("unknown agent"))?;
+    let agent = state.config.agents.get(&agent_name).ok_or(ApiError::BadRequest("unknown agent"))?;
     let prompts = &state.config.prompts;
     let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET assignee = ?1, updated_at = {NOW} WHERE id = \
          (SELECT id FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?2)) AND NOT {BLOCKED} \
+          AND (agent IS NULL OR agent = ?4) \
           ORDER BY id IS ?3, rank ASC, id ASC LIMIT 1) \
          RETURNING {COLUMNS}"
     ))
     .bind(&id)
     .bind(format!("[{}]", states.join(",")))
     .bind(exclude)
+    .bind(&agent_name)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {
@@ -609,7 +625,8 @@ async fn poll(
     tx.commit().await?;
     let ticket: Ticket = row.into();
     let prompt = render(&prompts[&ticket.state], &ticket);
-    Ok(Json(PollResponse { ticket, run, prompt, repos: state.config.project.repos.clone(), run_timeout: agent.run_timeout }).into_response())
+    let model = ticket.model.clone();
+    Ok(Json(PollResponse { ticket, run, prompt, model, repos: state.config.project.repos.clone(), run_timeout: agent.run_timeout }).into_response())
 }
 
 fn render(template: &str, t: &Ticket) -> String {
@@ -626,6 +643,7 @@ struct UsageRow {
     ticket_id: i64,
     worker_id: String,
     agent: String,
+    model: Option<String>,
     tokens_in: i64,
     tokens_out: i64,
     cost: f64,
@@ -639,6 +657,7 @@ impl From<UsageRow> for Usage {
             ticket_id: r.ticket_id,
             worker_id: r.worker_id,
             agent: r.agent,
+            model: r.model,
             tokens_in: r.tokens_in,
             tokens_out: r.tokens_out,
             cost: r.cost,
@@ -647,9 +666,10 @@ impl From<UsageRow> for Usage {
     }
 }
 
-const USAGE_COLUMNS: &str = "id, ticket_id, worker_id, agent, tokens_in, tokens_out, cost, created_at";
+const USAGE_COLUMNS: &str = "id, ticket_id, worker_id, agent, model, tokens_in, tokens_out, cost, created_at";
 
-/// Spec 8: a worker reports what an agent run on a ticket cost. Attributed to the worker and its agent at report time.
+/// Spec 8: a worker reports what an agent run on a ticket cost, and the model it ran with. Attributed to the worker
+/// and its agent at report time; the model is also recorded on the run this ends.
 async fn report_usage(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -658,16 +678,21 @@ async fn report_usage(
 ) -> Result<(StatusCode, Json<Usage>), ApiError> {
     caller.require_worker(&id)?;
     ticket_exists(&state, req.ticket_id).await?;
-    sqlx::query(&format!("UPDATE runs SET ended_at = {NOW} WHERE worker_id = ?1 AND ended_at IS NULL")).bind(&id).execute(&state.pool).await?;
+    sqlx::query(&format!("UPDATE runs SET ended_at = {NOW}, model = ?2 WHERE worker_id = ?1 AND ended_at IS NULL"))
+        .bind(&id)
+        .bind(&req.model)
+        .execute(&state.pool)
+        .await?;
     let row: Option<UsageRow> = sqlx::query_as(&format!(
-        "INSERT INTO usage (ticket_id, worker_id, agent, tokens_in, tokens_out, cost, created_at) \
-         SELECT ?1, id, agent, ?2, ?3, ?4, {NOW} FROM workers WHERE id = ?5 RETURNING {USAGE_COLUMNS}"
+        "INSERT INTO usage (ticket_id, worker_id, agent, model, tokens_in, tokens_out, cost, created_at) \
+         SELECT ?1, id, agent, ?6, ?2, ?3, ?4, {NOW} FROM workers WHERE id = ?5 RETURNING {USAGE_COLUMNS}"
     ))
     .bind(req.ticket_id)
     .bind(req.tokens_in)
     .bind(req.tokens_out)
     .bind(req.cost)
     .bind(&id)
+    .bind(&req.model)
     .fetch_optional(&state.pool)
     .await?;
     row.map(|r| (StatusCode::CREATED, Json(r.into()))).ok_or(ApiError::NotFound)
@@ -790,6 +815,7 @@ async fn metrics(State(state): State<AppState>) -> Result<Json<Metrics>, ApiErro
         per_ticket: breakdown(&state.pool, "ticket_id", |ticket_id| TicketKey { ticket_id }).await?,
         per_worker: breakdown(&state.pool, "worker_id", |worker_id| WorkerKey { worker_id }).await?,
         per_agent: breakdown(&state.pool, "agent", |agent| AgentKey { agent }).await?,
+        per_model: breakdown(&state.pool, "model", |model| ModelKey { model }).await?,
     }))
 }
 
