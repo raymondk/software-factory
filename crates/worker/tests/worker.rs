@@ -21,10 +21,9 @@ heartbeat_timeout = "60s"
 max_workers = 4
 [provider]
 url = "http://localhost:8081"
-[worker_types.default]
-agent = "command"
+[agents.command]
 run_timeout = "1s"
-[worker_types.default.prompts]
+[prompts]
 ready = "Work on #{{ticket.id}}: {{ticket.title}}"
 in_progress = "Resume #{{ticket.id}}"
 "#;
@@ -75,7 +74,7 @@ impl Fixture {
 
     /// Starts the worker binary with `script` (appended to `PRELUDE`) as its agent. Returns the process, worker id, and workspace.
     async fn worker(&self, script: &str) -> (Proc, String, PathBuf) {
-        let w = self.human.create_worker(&api_client::CreateWorker { worker_type: "default".into() }).await.unwrap();
+        let w = self.human.create_worker(&api_client::CreateWorker { agent: "command".into() }).await.unwrap();
         let agent = self.dir.path().join(format!("agent-{}.sh", w.id));
         std::fs::write(&agent, format!("{PRELUDE}{script}")).unwrap();
         std::fs::set_permissions(&agent, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
@@ -84,7 +83,7 @@ impl Fixture {
             .env("FACTORY_URL", &self.url)
             .env("FACTORY_WORKER_ID", &w.id)
             .env("FACTORY_WORKER_TOKEN", &w.token)
-            .env("FACTORY_WORKER_TYPE", "default")
+            .env("FACTORY_AGENT", "command")
             .env("FACTORY_WORKSPACE", &workspace)
             .env("FACTORY_AGENT_COMMAND", &agent)
             .env("FACTORY_POLL_INTERVAL", "100ms")
@@ -168,7 +167,7 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
         assert!(Instant::now() < deadline, "agent output never shipped: {lines:?}");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert!(lines[0].line.starts_with(&format!("worker {wid} (default, agent command) starting")) && lines[0].run_id.is_none(), "{lines:?}");
+    assert!(lines[0].line.starts_with(&format!("worker {wid} (agent command) starting")) && lines[0].run_id.is_none(), "{lines:?}");
     assert!(lines.iter().any(|l| l.line.contains(&format!("ticket #{id} (ready), run {run}")) && l.run_id == Some(run)));
     let of_run = f.human.run_logs(run, None).await.unwrap();
     assert!(of_run.iter().all(|l| l.run_id == Some(run)) && of_run.iter().any(|l| l.line == "working"));

@@ -13,7 +13,9 @@ pub struct Config {
     pub orchestrator: Orchestrator,
     pub scheduler: Scheduler,
     pub provider: Provider,
-    pub worker_types: BTreeMap<String, WorkerType>,
+    pub agents: BTreeMap<String, Agent>,
+    /// Prompt template per workable state, shared by all agents.
+    pub prompts: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,11 +58,9 @@ pub struct Provider {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WorkerType {
-    pub agent: String,
+pub struct Agent {
     #[serde(with = "humantime_serde")]
     pub run_timeout: Duration,
-    pub prompts: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -83,10 +83,8 @@ impl Config {
         if config.orchestrator.token.is_empty() {
             bail!("orchestrator.token must not be empty");
         }
-        for (name, wt) in &config.worker_types {
-            if let Some(state) = wt.prompts.keys().find(|s| !crate::STATES.contains(&s.as_str())) {
-                bail!("worker_types.{name}.prompts: unknown state {state:?}");
-            }
+        if let Some(state) = config.prompts.keys().find(|s| !crate::STATES.contains(&s.as_str())) {
+            bail!("prompts: unknown state {state:?}");
         }
         Ok(config)
     }
@@ -102,8 +100,8 @@ mod tests {
     fn parses_example() {
         let c = Config::parse(EXAMPLE).unwrap();
         assert_eq!(c.orchestrator.heartbeat_timeout, Duration::from_secs(60));
-        assert_eq!(c.worker_types["default"].run_timeout, Duration::from_secs(3600));
-        assert!(c.worker_types["default"].prompts.contains_key("ready"));
+        assert_eq!(c.agents["claude-code"].run_timeout, Duration::from_secs(3600));
+        assert!(c.prompts.contains_key("ready"));
         assert_eq!(c.orchestrator.public_url.as_deref(), Some("http://localhost:8080"));
         assert_eq!(c.scheduler.interval, Duration::from_secs(10));
         let c = Config::parse(&EXAMPLE.replace("listen = \"0.0.0.0:8080\"", "listen = \"10.0.0.5:9000\"\npublic_url = \"http://factory:9000\"")).unwrap();

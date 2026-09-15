@@ -59,7 +59,6 @@ async fn run() -> anyhow::Result<ExitCode> {
     let url = env("FACTORY_URL")?;
     let id = env("FACTORY_WORKER_ID")?;
     let token = std::env::var("FACTORY_WORKER_TOKEN").or_else(|_| env("FACTORY_TOKEN"))?;
-    let worker_type = std::env::var("FACTORY_WORKER_TYPE").unwrap_or_default();
     let workspace = match std::env::var_os("FACTORY_WORKSPACE") {
         Some(dir) => PathBuf::from(dir),
         None if PathBuf::from("/workspace").is_dir() => PathBuf::from("/workspace"),
@@ -80,7 +79,7 @@ async fn run() -> anyhow::Result<ExitCode> {
     };
     let log = Log::start(Client::new(&url, &token), id.clone(), shipping);
     let worker = Arc::new(Worker { client: Client::new(&url, &token), id, url, token, workspace, poll_interval, log });
-    worker.log.line(format!("worker {} ({worker_type}, agent {agent}) starting; workspace {}", worker.id, worker.workspace.display()));
+    worker.log.line(format!("worker {} (agent {agent}) starting; workspace {}", worker.id, worker.workspace.display()));
     let result = match command {
         Some(command) => worker.serve(&CommandAdapter { command }, heartbeat_interval).await,
         None => {
