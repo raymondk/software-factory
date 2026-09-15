@@ -56,7 +56,8 @@ test("creates a ticket from the dialog", async ({ page, server }) => {
   await expect(page.locator("#create")).toBeVisible();
   await page.fill("#create input[name=title]", "Created in browser");
   await page.selectOption("#create select[name=state]", "ready");
-  await page.fill("#create input[name=agent]", "codex");
+  await page.selectOption("#create select[name=agent]", "codex");
+  await expect(page.locator("#create select[name=model] option")).toHaveText(["Model (default)", "o3"]);
   await page.click("#create button:text-is('Create ticket')");
   await expect(page.locator("#create")).toBeHidden();
   await expect(page.locator(".column.ready .card", { hasText: "Created in browser" })).toBeVisible();
@@ -91,13 +92,13 @@ test("edits title and state from the form and the Mark ready action", async ({ p
   await page.goto(`/#/tickets/${t.id}`);
   await page.fill("#detail input[name=title]", "Edited");
   await page.selectOption("#detail select[name=state]", "in_review");
-  await page.fill("#detail input[name=agent]", "claude-code");
-  await page.fill("#detail input[name=model]", "opus");
+  await page.selectOption("#detail select[name=agent]", "claude-code");
+  await page.selectOption("#detail select[name=model]", "opus");
   await page.click("#detail button:text-is('Save')");
   await expect(page.locator("#detail .saved")).toHaveText("Saved");
   await expect(page.locator(".column.in_review .card", { hasText: "Edited" })).toBeVisible();
   expect(await server.api(`/tickets/${t.id}`)).toMatchObject({ agent: "claude-code", model: "opus" });
-  await page.fill("#detail input[name=model]", "");
+  await page.selectOption("#detail select[name=model]", "");
   await page.click("#detail button:text-is('Save')");
   await expect.poll(async () => (await server.api(`/tickets/${t.id}`)).model).toBe(null);
   await page.click("#actions button:text-is('Back to todo')");

@@ -4,13 +4,14 @@ import { useApp, useBusy } from "./context.js";
 import { ACTIONS, STATES, ago, isHttp, markdown, usageLine } from "./format.js";
 import { LogPane } from "./Log.jsx";
 import { Header } from "./Header.jsx";
+import { AgentModel } from "./AgentModel.jsx";
 
 const FIELDS = ["title", "state", "description", "links", "agent", "model"];
 const same = (a, b) => FIELDS.every(k => a[k] === b[k]);
 
 // Detail pane for one ticket (remounted per ticket via key). The form follows the server while untouched;
 // once edited it keeps the user's text and offers a reload when the server version changes.
-export function Detail({ ticket: t, usage, run }) {
+export function Detail({ ticket: t, usage, run, agents = {} }) {
   const { refresh, select } = useApp();
   const busy = useBusy();
   const server = useMemo(() => ({ title: t.title, state: t.state, description: t.description, links: t.links.join("\n"), agent: t.agent ?? "", model: t.model ?? "" }),
@@ -49,7 +50,7 @@ export function Detail({ ticket: t, usage, run }) {
         <div class="notice" hidden={same(server, loaded)}>Ticket changed on the server. <button type="button" onClick={() => fill(server)}>Reload</button></div>
         <input name="title" required value={values.title} onInput={set} />
         <select name="state" value={values.state} onChange={set}>{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
-        <div class="pair"><input name="agent" placeholder="Agent (any)" value={values.agent} onInput={set} /><input name="model" placeholder="Model (default)" value={values.model} onInput={set} /></div>
+        <AgentModel agents={agents} agent={values.agent} model={values.model} onChange={p => setValues({ ...values, ...p })} />
         <textarea name="description" rows={10} value={values.description} onInput={set} />
         <textarea name="links" rows={3} placeholder="Links, one per line" value={values.links} onInput={set} />
         <div class="row"><span class="saved" hidden={!saved}>Saved</span><button class="primary">Save</button></div>

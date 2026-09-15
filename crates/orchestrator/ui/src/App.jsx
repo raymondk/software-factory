@@ -8,6 +8,7 @@ import { Workers } from "./Workers.jsx";
 import { Metrics } from "./Metrics.jsx";
 import { LogPane } from "./Log.jsx";
 import { Header } from "./Header.jsx";
+import { AgentModel } from "./AgentModel.jsx";
 
 // What is open lives in the URL hash, so reload, back and forward all go through history:
 // #/tickets/<id>, #/tickets/<id>/runs/<run> (that run's log), #/workers/<id> (the worker's log).
@@ -21,6 +22,7 @@ export function App() {
   const [tickets, setTickets] = useState(null); // null until the first load settles
   const [workers, setWorkers] = useState([]);
   const [metrics, setMetrics] = useState(null);
+  const [agents, setAgents] = useState({}); // what the providers advertise: agent -> models
   const [selected, setSelected] = useState(idFromHash);
   const [run, setRun] = useState(runFromHash);
   const [workerLog, setWorkerLog] = useState(workerFromHash);
@@ -35,9 +37,9 @@ export function App() {
   const refresh = useCallback(async fromPoll => {
     const id = selectedRef.current;
     try {
-      const [ts, ws, m, t] = await Promise.all([api("/tickets"), api("/workers"), api("/metrics"),
+      const [ts, ws, m, ag, t] = await Promise.all([api("/tickets"), api("/workers"), api("/metrics"), api("/agents"),
         id == null ? null : api("/tickets/" + id).catch(e => { if (e.message !== "not found") throw e; })]);
-      setTickets(ts); setWorkers(ws); setMetrics(m);
+      setTickets(ts); setWorkers(ws); setMetrics(m); setAgents(ag);
       if (id != null && !t) { showError(`Ticket ${id} not found`); clearHash(); setSelected(null); }
       if (selectedRef.current === id) setTicket(t ?? null);
       if (fromPoll) setError(e => e?.fromPoll ? null : e);
@@ -100,11 +102,11 @@ export function App() {
       <h1>Software Factory</h1>
       <div id="error">{error && <><span>{error.message}</span><button onClick={() => setError(null)}>×</button></>}</div>
       <section>
-        <CreateDialog />
+        <CreateDialog agents={agents} />
         <div id="board">{tickets ? <Board tickets={tickets} selected={selected} /> : <span id="loading">Loading…</span>}</div>
       </section>
       <dialog id="detail" ref={dialog} onClose={dismissed} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
-        {ticket && <Detail key={ticket.id} ticket={ticket} usage={usage} run={run} />}
+        {ticket && <Detail key={ticket.id} ticket={ticket} usage={usage} run={run} agents={agents} />}
       </dialog>
       <dialog id="worker-log" ref={workerDialog} onClose={workerDismissed} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
         {loggedWorker && <>
@@ -119,17 +121,18 @@ export function App() {
 }
 
 // "New ticket" opens a dialog with the form; a failed request shows its error inside and keeps the input.
-function CreateDialog() {
+function CreateDialog({ agents }) {
   const { refresh } = useApp();
   const dialog = useRef();
   const [error, setError] = useState(null);
+  const [pick, setPick] = useState({ agent: "", model: "" });
   const busy = useBusy(m => setError(m));
   const submit = busy(async e => {
     e.preventDefault();
     const form = e.currentTarget, f = new FormData(form);
     // Empty agent and model mean "any" and "the provider's default": left out rather than sent as "".
     await api("/tickets", { method: "POST", body: JSON.stringify(Object.fromEntries([...f].filter(([, v]) => v !== ""))) });
-    form.reset();
+    form.reset(); setPick({ agent: "", model: "" });
     dialog.current.close();
     await refresh();
   });
@@ -142,7 +145,7 @@ function CreateDialog() {
           {error && <div class="error">{error}</div>}
           <input name="title" placeholder="Title" required />
           <select name="state">{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
-          <div class="pair"><input name="agent" placeholder="Agent (any)" /><input name="model" placeholder="Model (default)" /></div>
+          <AgentModel agents={agents} {...pick} onChange={setPick} />
           <textarea name="description" placeholder="Description" rows={16} />
           <div class="row"><button class="primary">Create ticket</button></div>
         </form>

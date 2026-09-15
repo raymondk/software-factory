@@ -427,6 +427,12 @@ impl Client {
         Self::send(r).await
     }
 
+    /// Advertised agents, each with the models some provider supports for it.
+    pub async fn agents(&self) -> Result<std::collections::BTreeMap<String, Vec<String>>, Error> {
+        let r = self.http.get(format!("{}/agents", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
     async fn send<T: for<'de> Deserialize<'de>>(r: reqwest::RequestBuilder) -> Result<T, Error> {
         Ok(Self::check(r).await?.json().await?)
     }

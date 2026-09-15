@@ -14,6 +14,14 @@ fn new(title: &str) -> CreateTicket {
 }
 
 #[tokio::test]
+async fn agents_lists_what_providers_advertise() {
+    let (url, _dir) = serve().await;
+    let agents = Client::new(&url, TOKEN).agents().await.unwrap();
+    let expect = |a: &str, ms: &[&str]| (a.to_string(), ms.iter().map(|m| m.to_string()).collect::<Vec<_>>());
+    assert_eq!(agents.into_iter().collect::<Vec<_>>(), vec![expect("claude-code", &["sonnet", "opus"]), expect("codex", &["o3"])]);
+}
+
+#[tokio::test]
 async fn agent_and_model_must_be_advertised_together_by_a_provider() {
     let (url, _dir) = serve().await;
     let client = Client::new(&url, TOKEN);
