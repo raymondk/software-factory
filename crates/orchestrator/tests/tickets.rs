@@ -346,8 +346,11 @@ async fn comments_add_list_resolve() {
     let other = client.create_ticket(&new("b")).await.unwrap();
     assert!(client.list_comments(t.id).await.unwrap().is_empty());
 
+    tick().await;
     let first = client.add_comment(t.id, &comment("first")).await.unwrap();
     assert_eq!((first.ticket_id, first.author.as_str(), first.body.as_str(), first.resolved), (t.id, "admin", "first", false));
+    let commented = client.get_ticket(t.id).await.unwrap().updated_at;
+    assert!(commented > t.updated_at, "a comment bumps updated_at");
     tick().await;
     let second = client.add_comment(t.id, &comment("second")).await.unwrap();
     client.add_comment(other.id, &comment("elsewhere")).await.unwrap();
@@ -356,15 +359,20 @@ async fn comments_add_list_resolve() {
     let ids = |list: Vec<api_client::Comment>| list.into_iter().map(|c| c.id).collect::<Vec<_>>();
     assert_eq!(ids(client.list_comments(t.id).await.unwrap()), vec![first.id, second.id]);
 
+    tick().await;
     let resolved = client.resolve_comment(t.id, first.id).await.unwrap();
     assert!(resolved.resolved && resolved.id == first.id);
     // Stays in the thread, and the ticket embeds it.
     let got = client.get_ticket(t.id).await.unwrap();
+    assert!(got.updated_at > commented, "resolving bumps updated_at");
     assert_eq!(got.comments.iter().map(|c| (c.id, c.resolved)).collect::<Vec<_>>(), vec![(first.id, true), (second.id, false)]);
     assert_eq!(got.comments[1].body, "second");
+    tick().await;
     let back = client.unresolve_comment(t.id, first.id).await.unwrap();
     assert!(!back.resolved && back.id == first.id);
-    assert!(!client.get_ticket(t.id).await.unwrap().comments[0].resolved);
+    let got2 = client.get_ticket(t.id).await.unwrap();
+    assert!(!got2.comments[0].resolved);
+    assert!(got2.updated_at > got.updated_at, "unresolving bumps updated_at");
     // The list endpoint does not embed threads.
     assert!(client.list_tickets(&Default::default()).await.unwrap().iter().all(|t| t.comments.is_empty()));
 }
@@ -411,10 +419,15 @@ async fn relations_are_created_listed_and_deleted() {
     let (url, _dir) = serve().await;
     let client = Client::new(&url, TOKEN);
     let a = client.create_ticket(&new("a")).await.unwrap().id;
-    let b = client.create_ticket(&CreateTicket { state: Some("done".into()), ..new("b") }).await.unwrap().id;
+    let bt = client.create_ticket(&CreateTicket { state: Some("done".into()), ..new("b") }).await.unwrap();
+    let b = bt.id;
     let c = client.create_ticket(&new("c")).await.unwrap().id;
 
-    client.add_relation(a, &relation("depends_on", b)).await.unwrap();
+    tick().await;
+    let linked = client.add_relation(a, &relation("depends_on", b)).await.unwrap();
+    assert!(linked.updated_at > linked.created_at, "relating bumps updated_at");
+    let b_linked = client.get_ticket(b).await.unwrap().updated_at;
+    assert!(b_linked > bt.updated_at, "on both tickets");
     let t = client.add_relation(a, &relation("related_to", c)).await.unwrap();
     let view: Vec<_> = t.relations.iter().map(|r| (r.r#type.as_str(), r.ticket, r.state.as_str(), r.satisfied)).collect();
     assert_eq!(view, vec![("depends_on", b, "done", Some(true)), ("related_to", c, "todo", None)]);
@@ -431,7 +444,9 @@ async fn relations_are_created_listed_and_deleted() {
     // related_to is removable from either side.
     assert!(client.remove_relation(c, "related_to", a).await.unwrap().relations.is_empty());
     assert!(client.get_ticket(a).await.unwrap().relations.iter().all(|r| r.r#type == "depends_on"));
+    tick().await;
     assert!(client.remove_relation(a, "depends_on", b).await.unwrap().relations.is_empty());
+    assert!(client.get_ticket(b).await.unwrap().updated_at > b_linked, "unrelating bumps updated_at on both tickets");
     match client.remove_relation(a, "depends_on", b).await {
         Err(Error::Api { status: 404, .. }) => {}
         other => panic!("expected 404, got {other:?}"),

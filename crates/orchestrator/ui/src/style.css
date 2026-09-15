@@ -74,6 +74,7 @@ pre { white-space: pre-wrap; }
 .card.selected { border-color: var(--icp-accent); background: var(--icp-accent-dim); }
 .meta { display: flex; gap: .4rem; align-items: center; margin-top: .3rem; color: var(--icp-fg-secondary); font-size: .85em; }
 .meta a { text-decoration: none; }
+.meta .updated { margin-left: auto; white-space: nowrap; }
 .card.dragging { opacity: .5; }
 .card.drop-before { border-top: 3px solid var(--icp-accent); }
 .card.drop-after { border-bottom: 3px solid var(--icp-accent); }

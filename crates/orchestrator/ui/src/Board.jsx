@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import { api, patch } from "./api.js";
 import { useApp } from "./context.js";
-import { STATES, isHttp } from "./format.js";
+import { STATES, ago, isHttp } from "./format.js";
 
 const upper = (e, c) => { const r = c.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; };
 
@@ -41,6 +41,7 @@ export function Board({ tickets, selected }) {
         {t.blocked && <span class="tag blocked" title="Waiting on a dependency">blocked</span>}
         {t.links.filter(isHttp).map(href => <a key={href} href={href} target="_blank" rel="noopener" title={href} onClick={e => e.stopPropagation()}>↗</a>)}
         {t.unresolved_comments ? <span class="badge" title="unresolved comments">{t.unresolved_comments}</span> : null}
+        <span class="updated" title={"updated " + t.updated_at}>{ago(t.updated_at)}</span>
       </div>
     </div>
   );
