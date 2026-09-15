@@ -6,6 +6,7 @@ pub mod db;
 pub mod provider;
 pub mod reaper;
 pub mod scheduler;
+pub mod users;
 
 pub const STATES: [&str; 6] = ["todo", "ready", "in_progress", "in_review", "failed", "done"];
 

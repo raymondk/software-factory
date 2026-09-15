@@ -11,7 +11,7 @@ use axum::{Extension, Json, Router};
 use sqlx::{Connection, SqliteExecutor};
 
 use crate::config::Config;
-use crate::{AppState, STATES};
+use crate::{users, AppState, STATES};
 
 /// Built by build.rs.
 const UI: &str = include_str!("../ui/dist/index.html");
@@ -38,6 +38,12 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(metrics))
         .route("/agents", get(agents))
         .route("/config", get(config))
+        .route("/me", get(users::me))
+        .route("/users", get(users::list))
+        .route("/users/{principal}/approve", post(users::approve))
+        .route("/users/{principal}/revoke", post(users::revoke))
+        .route("/tokens", get(users::list_tokens).post(users::create_token))
+        .route("/tokens/{id}", delete(users::delete_token))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
     Router::new().route("/", get(ui)).route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT })).merge(api).with_state(state)
 }
@@ -45,7 +51,11 @@ pub fn router(state: AppState) -> Router {
 /// Who is making the request, as established by `auth`. Handlers read it via `Extension<Caller>`.
 #[derive(Clone, Debug)]
 pub enum Caller {
-    Human,
+    /// The configured `orchestrator.token`.
+    Admin,
+    /// A developer, by Internet Identity principal, through a session or personal token. `status` is `pending`,
+    /// `approved` or `revoked`; `auth` lets only `approved` past, except to `GET /me`.
+    User { principal: String, name: Option<String>, status: String },
     /// A worker, by id. May only act as itself and on tickets it holds.
     Worker(String),
 }
@@ -53,9 +63,14 @@ pub enum Caller {
 impl Caller {
     fn name(&self) -> &str {
         match self {
-            Caller::Human => "human",
+            Caller::Admin => "admin",
+            Caller::User { principal, name, .. } => name.as_deref().unwrap_or(principal),
             Caller::Worker(id) => id,
         }
+    }
+
+    fn is_human(&self) -> bool {
+        !matches!(self, Caller::Worker(_))
     }
 
     /// Worker-scoped endpoints: only that worker may call them.
@@ -75,18 +90,28 @@ async fn auth(State(state): State<AppState>, mut req: Request, next: Next) -> Re
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or_default()
         .to_string();
-    let caller = if token == state.config.orchestrator.token {
-        Caller::Human
-    } else {
-        let worker: Result<Option<(String,)>, _> = sqlx::query_as("SELECT id FROM workers WHERE token = ?1 AND status != 'dead'").bind(&token).fetch_optional(&state.pool).await;
-        match worker {
-            Ok(Some((id,))) => Caller::Worker(id),
-            Ok(None) => return ApiError::Unauthorized.into_response(),
-            Err(e) => return ApiError::Db(e).into_response(),
-        }
+    let caller = match resolve(&state, &token).await {
+        Ok(Some(caller)) => caller,
+        Ok(None) => return ApiError::Unauthorized.into_response(),
+        Err(e) => return ApiError::Db(e).into_response(),
     };
+    if matches!(&caller, Caller::User { status, .. } if status != "approved") && req.uri().path() != "/me" {
+        return ApiError::Forbidden.into_response();
+    }
     req.extensions_mut().insert(caller);
     next.run(req).await
+}
+
+/// Admin token, then a user's session or personal token, then a live worker's token.
+async fn resolve(state: &AppState, token: &str) -> sqlx::Result<Option<Caller>> {
+    if token == state.config.orchestrator.token {
+        return Ok(Some(Caller::Admin));
+    }
+    if let Some(user) = users::resolve(&state.pool, token).await? {
+        return Ok(Some(user));
+    }
+    let worker: Option<(String,)> = sqlx::query_as("SELECT id FROM workers WHERE token = ?1 AND status != 'dead'").bind(token).fetch_optional(&state.pool).await?;
+    Ok(worker.map(|(id,)| Caller::Worker(id)))
 }
 
 async fn ui(State(state): State<AppState>) -> Html<String> {
@@ -160,7 +185,7 @@ const COMMENT_COLUMNS: &str = "id, ticket_id, author, body, created_at, resolved
 pub const BLOCKED: &str = "(tickets.state = 'ready' AND EXISTS (SELECT 1 FROM ticket_relations r JOIN tickets d ON d.id = r.to_id \
     WHERE r.from_id = tickets.id AND r.type = 'depends_on' AND d.state NOT IN ('in_review', 'done')))";
 const RELATION_TYPES: [&str; 2] = ["depends_on", "related_to"];
-const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+pub(crate) const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
 async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTicket>) -> Result<(StatusCode, Json<Ticket>), ApiError> {
     if req.title.trim().is_empty() {
@@ -416,9 +441,8 @@ async fn authorize(caller: &Caller, db: impl SqliteExecutor<'_>, id: i64) -> Res
     let row: Option<(Option<String>,)> = sqlx::query_as("SELECT assignee FROM tickets WHERE id = ?1").bind(id).fetch_optional(db).await?;
     let (assignee,) = row.ok_or(ApiError::NotFound)?;
     match caller {
-        Caller::Human => Ok(()),
-        Caller::Worker(w) if assignee.as_deref() == Some(w) => Ok(()),
-        Caller::Worker(_) => Err(ApiError::Forbidden),
+        Caller::Worker(w) if assignee.as_deref() != Some(w) => Err(ApiError::Forbidden),
+        _ => Ok(()),
     }
 }
 
@@ -568,7 +592,7 @@ async fn create_worker(
     Extension(caller): Extension<Caller>,
     Json(req): Json<CreateWorker>,
 ) -> Result<(StatusCode, Json<NewWorker>), ApiError> {
-    if !matches!(caller, Caller::Human) {
+    if !caller.is_human() {
         return Err(ApiError::Forbidden);
     }
     // The first configured provider unless the request names one.

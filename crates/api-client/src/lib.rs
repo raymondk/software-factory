@@ -292,6 +292,42 @@ pub struct Metrics {
     pub per_model: Vec<Breakdown<ModelKey>>,
 }
 
+/// A developer, by Internet Identity principal. `status`: `pending` (signed in, not yet approved), `approved`,
+/// `revoked`. `name` is set by the admin's approval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub principal: String,
+    pub name: Option<String>,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApproveUser {
+    pub name: String,
+}
+
+/// A developer's token for the CLI. The token itself is only returned at creation, as `NewToken`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonalToken {
+    pub id: i64,
+    pub name: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateToken {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewToken {
+    pub id: i64,
+    pub name: String,
+    pub created_at: String,
+    pub token: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("http error: {0}")]
@@ -431,6 +467,43 @@ impl Client {
     pub async fn agents(&self) -> Result<std::collections::BTreeMap<String, Vec<String>>, Error> {
         let r = self.http.get(format!("{}/agents", self.base)).bearer_auth(&self.token);
         Self::send(r).await
+    }
+
+    /// The calling developer; 404 for the admin and workers.
+    pub async fn me(&self) -> Result<User, Error> {
+        let r = self.http.get(format!("{}/me", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    /// Every user for the admin; approved ones for everyone else.
+    pub async fn list_users(&self) -> Result<Vec<User>, Error> {
+        let r = self.http.get(format!("{}/users", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    pub async fn approve_user(&self, principal: &str, req: &ApproveUser) -> Result<User, Error> {
+        let r = self.http.post(format!("{}/users/{principal}/approve", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn revoke_user(&self, principal: &str) -> Result<User, Error> {
+        let r = self.http.post(format!("{}/users/{principal}/revoke", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    pub async fn list_tokens(&self) -> Result<Vec<PersonalToken>, Error> {
+        let r = self.http.get(format!("{}/tokens", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    pub async fn create_token(&self, req: &CreateToken) -> Result<NewToken, Error> {
+        let r = self.http.post(format!("{}/tokens", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn delete_token(&self, id: i64) -> Result<(), Error> {
+        let r = self.http.delete(format!("{}/tokens/{id}", self.base)).bearer_auth(&self.token);
+        Self::check(r).await.map(|_| ())
     }
 
     async fn send<T: for<'de> Deserialize<'de>>(r: reqwest::RequestBuilder) -> Result<T, Error> {
