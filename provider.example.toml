@@ -2,8 +2,10 @@
 listen = "0.0.0.0:8081"
 max_workers = 4
 
-[docker]
+[agents.claude-code]
 image = "software-factory/worker:latest"
+models = ["sonnet", "opus"]
+default_model = "sonnet"
 
 [worker_env]
 GIT_TOKEN = "change-me"

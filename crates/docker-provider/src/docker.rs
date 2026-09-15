@@ -6,8 +6,12 @@ use std::process::Stdio;
 use anyhow::{bail, Context};
 use tokio::process::Command;
 
+use crate::Running;
+
 /// Label carrying the worker id on every container this provider starts.
 pub const LABEL: &str = "software-factory.worker_id";
+/// Label carrying the agent the container runs.
+pub const AGENT_LABEL: &str = "software-factory.agent";
 
 async fn output(mut cmd: Command) -> anyhow::Result<std::process::Output> {
     cmd.stdin(Stdio::null()).output().await.context("running docker")
@@ -28,9 +32,9 @@ fn only_missing(out: &std::process::Output) -> bool {
 
 /// Starts a detached container from `image` and returns its id.
 /// Values are passed through the docker CLI's environment, not its arguments.
-pub async fn run(image: &str, worker_id: &str, env: &BTreeMap<String, String>) -> anyhow::Result<String> {
+pub async fn run(image: &str, worker_id: &str, agent: &str, env: &BTreeMap<String, String>) -> anyhow::Result<String> {
     let mut cmd = Command::new("docker");
-    cmd.args(["run", "-d", "--label", &format!("{LABEL}={worker_id}")]);
+    cmd.args(["run", "-d", "--label", &format!("{LABEL}={worker_id}"), "--label", &format!("{AGENT_LABEL}={agent}")]);
     for (k, v) in env {
         cmd.arg("-e").arg(k).env(k, v);
     }
@@ -73,18 +77,21 @@ pub async fn states(ids: impl Iterator<Item = &str>) -> anyhow::Result<HashMap<S
         .collect())
 }
 
-/// Every container this provider ever started (by label), as worker id -> container id.
-pub async fn tracked() -> anyhow::Result<BTreeMap<String, String>> {
+/// Every container this provider ever started (by label), by worker id.
+pub async fn tracked() -> anyhow::Result<BTreeMap<String, Running>> {
     let mut cmd = Command::new("docker");
     cmd.args(["ps", "-a", "--no-trunc", "--filter", &format!("label={LABEL}")]);
-    cmd.args(["--format", &format!("{{{{.ID}}}} {{{{.Label \"{LABEL}\"}}}}")]);
+    cmd.args(["--format", &format!("{{{{.ID}}}} {{{{.Label \"{LABEL}\"}}}} {{{{.Label \"{AGENT_LABEL}\"}}}}")]);
     let out = output(cmd).await?;
     if !out.status.success() {
         bail!("docker ps: {}", stderr(&out));
     }
     Ok(stdout(&out)
         .lines()
-        .filter_map(|l| l.split_once(' '))
-        .map(|(id, worker)| (worker.to_string(), id.to_string()))
+        .filter_map(|l| {
+            let mut parts = l.splitn(3, ' ');
+            Some((parts.next()?, parts.next()?, parts.next().unwrap_or_default()))
+        })
+        .map(|(id, worker, agent)| (worker.to_string(), Running { container_id: id.to_string(), agent: agent.to_string() }))
         .collect())
 }

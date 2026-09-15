@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use orchestrator::provider::{Provider, ProviderWorker, StartWorker, Status};
+use orchestrator::provider::{AgentInfo, Provider, ProviderWorker, StartWorker, Status};
 use orchestrator::{api, config::Config, db, scheduler};
 use sqlx::SqlitePool;
 
@@ -33,7 +34,8 @@ in_review = "review"
 #[derive(Default)]
 struct Fake {
     capacity: u32,
-    running: Vec<String>,
+    /// (worker id, agent)
+    running: Vec<(String, String)>,
     starts: Vec<StartWorker>,
     stops: Vec<String>,
     fail_start: bool,
@@ -49,7 +51,7 @@ async fn serve_fake(capacity: u32, fail_start: bool) -> (Provider, Shared) {
             if f.fail_start {
                 return StatusCode::INTERNAL_SERVER_ERROR;
             }
-            f.running.push(req.worker_id.clone());
+            f.running.push((req.worker_id.clone(), req.agent.clone()));
             f.starts.push(req);
             StatusCode::CREATED
         }))
@@ -57,13 +59,17 @@ async fn serve_fake(capacity: u32, fail_start: bool) -> (Provider, Shared) {
             let mut f = f.lock().unwrap();
             f.stops.push(id.clone());
             let before = f.running.len();
-            f.running.retain(|w| w != &id);
+            f.running.retain(|(w, _)| w != &id);
             if f.running.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
         }))
         .route("/status", get(|State(f): State<Shared>| async move {
             let f = f.lock().unwrap();
-            let workers = f.running.iter().map(|w| ProviderWorker { worker_id: w.clone(), status: "running".into() }).collect();
-            Json(Status { capacity: f.capacity, in_use: f.running.len() as u32, workers })
+            let workers = f.running.iter().map(|(w, a)| ProviderWorker { worker_id: w.clone(), agent: a.clone(), status: "running".into() }).collect();
+            let agents = ["claude-code", "codex"]
+                .into_iter()
+                .map(|a| (a.to_string(), AgentInfo { models: vec!["m".into()], default_model: "m".into() }))
+                .collect::<BTreeMap<_, _>>();
+            Json(Status { capacity: f.capacity, in_use: f.running.len() as u32, agents, workers })
         }))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -119,7 +125,7 @@ async fn worker(pool: &SqlitePool, config: &Config, fake: &Shared, agent: &str, 
     let w = api::new_worker(pool, config, agent).await.ok().unwrap();
     sqlx::query("UPDATE workers SET status = ?2 WHERE id = ?1").bind(&w.id).bind(status).execute(pool).await.unwrap();
     if listed {
-        fake.lock().unwrap().running.push(w.id.clone());
+        fake.lock().unwrap().running.push((w.id.clone(), agent.to_string()));
     }
     w.id
 }
@@ -254,10 +260,10 @@ async fn unknown_provider_workers_are_stopped() {
     let idle = worker(&pool, &config, &fake, "claude-code", "idle", true).await;
     let busy = worker(&pool, &config, &fake, "claude-code", "busy", true).await;
     ticket(&pool, "ready", None).await; // idle still has work
-    fake.lock().unwrap().running.push("w-unknown".into());
+    fake.lock().unwrap().running.push(("w-unknown".into(), "claude-code".into()));
     scheduler::tick(&pool, &config, &provider).await.unwrap();
     assert_eq!(fake.lock().unwrap().stops, vec!["w-unknown".to_string()]);
-    assert_eq!(fake.lock().unwrap().running, vec![starting.clone(), idle.clone(), busy.clone()]);
+    assert_eq!(fake.lock().unwrap().running.iter().map(|(w, _)| w.clone()).collect::<Vec<_>>(), vec![starting.clone(), idle.clone(), busy.clone()]);
     assert_eq!(status_of(&pool, &starting).await, "starting");
     assert_eq!(status_of(&pool, &idle).await, "idle");
     assert_eq!(status_of(&pool, &busy).await, "busy");
