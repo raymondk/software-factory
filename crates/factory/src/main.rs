@@ -29,7 +29,7 @@ enum Command {
         #[command(subcommand)]
         command: WorkerCommand,
     },
-    /// Print usage totals and breakdowns per ticket, worker, and worker type
+    /// Print usage totals and breakdowns per ticket, worker, and agent
     Metrics,
 }
 
@@ -37,8 +37,8 @@ enum Command {
 enum WorkerCommand {
     /// Create a worker record; prints its id and token (human token)
     Create {
-        #[arg(long = "type")]
-        worker_type: String,
+        #[arg(long)]
+        agent: String,
     },
     /// List workers
     List,
@@ -46,7 +46,7 @@ enum WorkerCommand {
     Register { id: String },
     /// Heartbeat (worker token)
     Heartbeat { id: String },
-    /// Pick up the next available ticket for the worker's type (worker token)
+    /// Pick up the next available ticket (worker token)
     Poll { id: String },
     /// Print a worker's whole log, including lines outside runs
     Logs {
@@ -218,13 +218,13 @@ async fn main() -> anyhow::Result<()> {
             TicketCommand::Unresolve { id, cid } => print(&client.unresolve_comment(id, cid).await?),
         },
         Command::Worker { command } => match command {
-            WorkerCommand::Create { worker_type } => print(&client.create_worker(&CreateWorker { worker_type }).await?),
+            WorkerCommand::Create { agent } => print(&client.create_worker(&CreateWorker { agent }).await?),
             WorkerCommand::List => {
                 for w in client.list_workers().await? {
                     println!(
                         "{}\t{}\t{}\t{}\t{}",
                         w.id,
-                        w.worker_type,
+                        w.agent,
                         w.status,
                         w.last_heartbeat.as_deref().unwrap_or("-"),
                         w.ticket.map(|t| format!("#{t}")).unwrap_or_else(|| "-".into())
@@ -248,7 +248,7 @@ async fn main() -> anyhow::Result<()> {
             print_totals("totals", "-", &m.totals);
             m.per_ticket.iter().for_each(|b: &Breakdown<_>| print_totals("ticket", &format!("#{}", b.key.ticket_id), &b.totals));
             m.per_worker.iter().for_each(|b| print_totals("worker", &b.key.worker_id, &b.totals));
-            m.per_worker_type.iter().for_each(|b| print_totals("type", &b.key.worker_type, &b.totals));
+            m.per_agent.iter().for_each(|b| print_totals("agent", &b.key.agent, &b.totals));
         }
     }
     Ok(())

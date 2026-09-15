@@ -53,8 +53,8 @@ pub struct Run {
     pub id: i64,
     pub ticket_id: i64,
     pub worker_id: String,
-    /// The agent the worker's type runs, from orchestrator config; null once the type is no longer configured.
-    pub agent: Option<String>,
+    /// The agent the worker runs.
+    pub agent: String,
     pub started_at: String,
     pub ended_at: Option<String>,
 }
@@ -147,9 +147,7 @@ pub struct ListTickets {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Worker {
     pub id: String,
-    pub worker_type: String,
-    /// The agent the worker's type runs, from orchestrator config; null once the type is no longer configured.
-    pub agent: Option<String>,
+    pub agent: String,
     /// One of: starting, idle, busy, dead
     pub status: String,
     pub created_at: String,
@@ -159,14 +157,14 @@ pub struct Worker {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWorker {
-    pub worker_type: String,
+    pub agent: String,
 }
 
 /// Returned once, at creation: the only time the token is visible.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewWorker {
     pub id: String,
-    pub worker_type: String,
+    pub agent: String,
     pub token: String,
 }
 
@@ -183,7 +181,7 @@ pub struct PollResponse {
     pub run: i64,
     pub prompt: String,
     pub repos: Vec<String>,
-    /// The worker type's `run_timeout`, e.g. "1h".
+    /// The agent's `run_timeout`, e.g. "1h".
     #[serde(with = "humantime_serde")]
     pub run_timeout: Duration,
 }
@@ -194,7 +192,7 @@ pub struct Usage {
     pub id: i64,
     pub ticket_id: i64,
     pub worker_id: String,
-    pub worker_type: String,
+    pub agent: String,
     pub tokens_in: i64,
     pub tokens_out: i64,
     pub cost: f64,
@@ -218,8 +216,8 @@ pub struct Totals {
     pub tickets_failed: i64,
 }
 
-/// Totals under one key: a ticket id, worker id, or worker type. Serializes flat, with the key as `ticket_id`,
-/// `worker_id`, or `worker_type`.
+/// Totals under one key: a ticket id, worker id, or agent. Serializes flat, with the key as `ticket_id`,
+/// `worker_id`, or `agent`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Breakdown<K> {
     #[serde(flatten)]
@@ -239,8 +237,8 @@ pub struct WorkerKey {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkerTypeKey {
-    pub worker_type: String,
+pub struct AgentKey {
+    pub agent: String,
 }
 
 /// Completed and failed counts derive from ticket states `done` and `failed`. Totals count all such tickets; a
@@ -250,7 +248,7 @@ pub struct Metrics {
     pub totals: Totals,
     pub per_ticket: Vec<Breakdown<TicketKey>>,
     pub per_worker: Vec<Breakdown<WorkerKey>>,
-    pub per_worker_type: Vec<Breakdown<WorkerTypeKey>>,
+    pub per_agent: Vec<Breakdown<AgentKey>>,
 }
 
 #[derive(Debug, thiserror::Error)]

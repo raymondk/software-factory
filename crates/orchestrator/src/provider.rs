@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartWorker {
     pub worker_id: String,
-    pub worker_type: String,
+    pub agent: String,
     pub orchestrator_url: String,
     pub worker_token: String,
 }

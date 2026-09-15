@@ -1,6 +1,6 @@
 use api_client::{
     Breakdown, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, LogLine, LogsAfter, Metrics, MoveTicket, NewWorker, PollRequest,
-    PollResponse, Relation, ReportUsage, Run, ShipLogs, Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, WorkerTypeKey,
+    PollResponse, Relation, ReportUsage, Run, ShipLogs, Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, AgentKey,
 };
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
@@ -208,11 +208,10 @@ async fn full_ticket(state: &AppState, id: i64) -> Result<Ticket, ApiError> {
             .bind(id)
             .fetch_all(&state.pool)
             .await?;
-    // The agent comes from the worker type's config, so the UI can pick a log renderer; null once the type is gone from config.
     ticket.runs = runs
         .into_iter()
         .map(|r| Run {
-            agent: state.config.worker_types.get(&r.worker_type).map(|wt| wt.agent.clone()),
+            agent: r.agent,
             id: r.id,
             ticket_id: r.ticket_id,
             worker_id: r.worker_id,
@@ -228,12 +227,12 @@ struct RunRow {
     id: i64,
     ticket_id: i64,
     worker_id: String,
-    worker_type: String,
+    agent: String,
     started_at: String,
     ended_at: Option<String>,
 }
 
-const RUN_COLUMNS: &str = "r.id, r.ticket_id, r.worker_id, w.worker_type, r.started_at, r.ended_at";
+const RUN_COLUMNS: &str = "r.id, r.ticket_id, r.worker_id, w.agent, r.started_at, r.ended_at";
 
 async fn comments_of(state: &AppState, ticket_id: i64) -> Result<Vec<Comment>, ApiError> {
     let rows: Vec<CommentRow> =
@@ -491,39 +490,37 @@ async fn move_ticket(
 #[derive(sqlx::FromRow)]
 struct WorkerRow {
     id: String,
-    worker_type: String,
+    agent: String,
     status: String,
     created_at: String,
     last_heartbeat: Option<String>,
     ticket: Option<i64>,
 }
 
-impl WorkerRow {
-    /// The agent comes from the worker type's config, so the UI can pick a log renderer; null once the type is gone from config.
-    fn into_worker(self, config: &Config) -> Worker {
-        let agent = config.worker_types.get(&self.worker_type).map(|wt| wt.agent.clone());
-        Worker { id: self.id, worker_type: self.worker_type, agent, status: self.status, created_at: self.created_at, last_heartbeat: self.last_heartbeat, ticket: self.ticket }
+impl From<WorkerRow> for Worker {
+    fn from(r: WorkerRow) -> Worker {
+        Worker { id: r.id, agent: r.agent, status: r.status, created_at: r.created_at, last_heartbeat: r.last_heartbeat, ticket: r.ticket }
     }
 }
 
 /// Worker columns for the API: everything but the token, plus the ticket it holds.
-const WORKER_COLUMNS: &str = "id, worker_type, status, created_at, last_heartbeat, \
+const WORKER_COLUMNS: &str = "id, agent, status, created_at, last_heartbeat, \
     (SELECT t.id FROM tickets t WHERE t.assignee = workers.id ORDER BY t.rank ASC, t.id ASC LIMIT 1) AS ticket";
 
 /// Creates a worker record with a fresh id and token. Also used by the scheduler.
-pub async fn new_worker(db: impl SqliteExecutor<'_>, config: &Config, worker_type: &str) -> Result<NewWorker, ApiError> {
-    if !config.worker_types.contains_key(worker_type) {
-        return Err(ApiError::BadRequest("unknown worker type"));
+pub async fn new_worker(db: impl SqliteExecutor<'_>, config: &Config, agent: &str) -> Result<NewWorker, ApiError> {
+    if !config.agents.contains_key(agent) {
+        return Err(ApiError::BadRequest("unknown agent"));
     }
-    let (id, worker_type, token): (String, String, String) = sqlx::query_as(&format!(
-        "INSERT INTO workers (id, worker_type, token, status, created_at) \
+    let (id, agent, token): (String, String, String) = sqlx::query_as(&format!(
+        "INSERT INTO workers (id, agent, token, status, created_at) \
          VALUES ('w-' || lower(hex(randomblob(4))), ?1, lower(hex(randomblob(24))), 'starting', {NOW}) \
-         RETURNING id, worker_type, token"
+         RETURNING id, agent, token"
     ))
-    .bind(worker_type)
+    .bind(agent)
     .fetch_one(db)
     .await?;
-    Ok(NewWorker { id, worker_type, token })
+    Ok(NewWorker { id, agent, token })
 }
 
 async fn create_worker(
@@ -534,18 +531,18 @@ async fn create_worker(
     if !matches!(caller, Caller::Human) {
         return Err(ApiError::Forbidden);
     }
-    Ok((StatusCode::CREATED, Json(new_worker(&state.pool, &state.config, &req.worker_type).await?)))
+    Ok((StatusCode::CREATED, Json(new_worker(&state.pool, &state.config, &req.agent).await?)))
 }
 
 async fn list_workers(State(state): State<AppState>) -> Result<Json<Vec<Worker>>, ApiError> {
     let rows: Vec<WorkerRow> =
         sqlx::query_as(&format!("SELECT {WORKER_COLUMNS} FROM workers ORDER BY created_at ASC, id ASC")).fetch_all(&state.pool).await?;
-    Ok(Json(rows.into_iter().map(|r| r.into_worker(&state.config)).collect()))
+    Ok(Json(rows.into_iter().map(Worker::from).collect()))
 }
 
 /// Only the authenticated worker itself gets here, so a missing row means the reaper marked it dead since: 401, and a
 /// dead worker is never resurrected.
-async fn set_status(db: impl SqliteExecutor<'_>, config: &Config, id: &str, status: &str) -> Result<Worker, ApiError> {
+async fn set_status(db: impl SqliteExecutor<'_>, id: &str, status: &str) -> Result<Worker, ApiError> {
     let row: Option<WorkerRow> = sqlx::query_as(&format!(
         "UPDATE workers SET status = ?2, last_heartbeat = {NOW} WHERE id = ?1 AND status != 'dead' RETURNING {WORKER_COLUMNS}"
     ))
@@ -553,12 +550,12 @@ async fn set_status(db: impl SqliteExecutor<'_>, config: &Config, id: &str, stat
     .bind(status)
     .fetch_optional(db)
     .await?;
-    row.map(|r| r.into_worker(config)).ok_or(ApiError::Unauthorized)
+    row.map(Worker::from).ok_or(ApiError::Unauthorized)
 }
 
 async fn register(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
     caller.require_worker(&id)?;
-    Ok(Json(set_status(&state.pool, &state.config, &id, "idle").await?))
+    Ok(Json(set_status(&state.pool, &id, "idle").await?))
 }
 
 async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
@@ -567,10 +564,10 @@ async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<C
         .bind(&id)
         .fetch_optional(&state.pool)
         .await?;
-    row.map(|r| Json(r.into_worker(&state.config))).ok_or(ApiError::NotFound)
+    row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
 }
 
-/// Hands the worker the lowest-ranked unassigned, unblocked ticket in a state its type has a prompt for. 204 when there is none.
+/// Hands the worker the lowest-ranked unassigned, unblocked ticket in a state that has a prompt. 204 when there is none.
 async fn poll(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -582,10 +579,10 @@ async fn poll(
     let mut conn = state.pool.acquire().await?;
     // IMMEDIATE serializes polls so two workers never pick the same ticket.
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
-    let (worker_type,): (String,) =
-        sqlx::query_as("SELECT worker_type FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
-    let wt = state.config.worker_types.get(&worker_type).ok_or(ApiError::BadRequest("unknown worker type"))?;
-    let prompts = &wt.prompts;
+    let (agent,): (String,) =
+        sqlx::query_as("SELECT agent FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
+    let agent = state.config.agents.get(&agent).ok_or(ApiError::BadRequest("unknown agent"))?;
+    let prompts = &state.config.prompts;
     let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET assignee = ?1, updated_at = {NOW} WHERE id = \
@@ -599,11 +596,11 @@ async fn poll(
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {
-        set_status(&mut *tx, &state.config, &id, "idle").await?;
+        set_status(&mut *tx, &id, "idle").await?;
         tx.commit().await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    set_status(&mut *tx, &state.config, &id, "busy").await?;
+    set_status(&mut *tx, &id, "busy").await?;
     let (run,): (i64,) = sqlx::query_as(&format!("INSERT INTO runs (ticket_id, worker_id, started_at) VALUES (?1, ?2, {NOW}) RETURNING id"))
         .bind(row.id)
         .bind(&id)
@@ -612,7 +609,7 @@ async fn poll(
     tx.commit().await?;
     let ticket: Ticket = row.into();
     let prompt = render(&prompts[&ticket.state], &ticket);
-    Ok(Json(PollResponse { ticket, run, prompt, repos: state.config.project.repos.clone(), run_timeout: wt.run_timeout }).into_response())
+    Ok(Json(PollResponse { ticket, run, prompt, repos: state.config.project.repos.clone(), run_timeout: agent.run_timeout }).into_response())
 }
 
 fn render(template: &str, t: &Ticket) -> String {
@@ -628,7 +625,7 @@ struct UsageRow {
     id: i64,
     ticket_id: i64,
     worker_id: String,
-    worker_type: String,
+    agent: String,
     tokens_in: i64,
     tokens_out: i64,
     cost: f64,
@@ -641,7 +638,7 @@ impl From<UsageRow> for Usage {
             id: r.id,
             ticket_id: r.ticket_id,
             worker_id: r.worker_id,
-            worker_type: r.worker_type,
+            agent: r.agent,
             tokens_in: r.tokens_in,
             tokens_out: r.tokens_out,
             cost: r.cost,
@@ -650,9 +647,9 @@ impl From<UsageRow> for Usage {
     }
 }
 
-const USAGE_COLUMNS: &str = "id, ticket_id, worker_id, worker_type, tokens_in, tokens_out, cost, created_at";
+const USAGE_COLUMNS: &str = "id, ticket_id, worker_id, agent, tokens_in, tokens_out, cost, created_at";
 
-/// Spec 8: a worker reports what an agent run on a ticket cost. Attributed to the worker and its type at report time.
+/// Spec 8: a worker reports what an agent run on a ticket cost. Attributed to the worker and its agent at report time.
 async fn report_usage(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -663,8 +660,8 @@ async fn report_usage(
     ticket_exists(&state, req.ticket_id).await?;
     sqlx::query(&format!("UPDATE runs SET ended_at = {NOW} WHERE worker_id = ?1 AND ended_at IS NULL")).bind(&id).execute(&state.pool).await?;
     let row: Option<UsageRow> = sqlx::query_as(&format!(
-        "INSERT INTO usage (ticket_id, worker_id, worker_type, tokens_in, tokens_out, cost, created_at) \
-         SELECT ?1, id, worker_type, ?2, ?3, ?4, {NOW} FROM workers WHERE id = ?5 RETURNING {USAGE_COLUMNS}"
+        "INSERT INTO usage (ticket_id, worker_id, agent, tokens_in, tokens_out, cost, created_at) \
+         SELECT ?1, id, agent, ?2, ?3, ?4, {NOW} FROM workers WHERE id = ?5 RETURNING {USAGE_COLUMNS}"
     ))
     .bind(req.ticket_id)
     .bind(req.tokens_in)
@@ -792,7 +789,7 @@ async fn metrics(State(state): State<AppState>) -> Result<Json<Metrics>, ApiErro
         totals: totals.into(),
         per_ticket: breakdown(&state.pool, "ticket_id", |ticket_id| TicketKey { ticket_id }).await?,
         per_worker: breakdown(&state.pool, "worker_id", |worker_id| WorkerKey { worker_id }).await?,
-        per_worker_type: breakdown(&state.pool, "worker_type", |worker_type| WorkerTypeKey { worker_type }).await?,
+        per_agent: breakdown(&state.pool, "agent", |agent| AgentKey { agent }).await?,
     }))
 }
 

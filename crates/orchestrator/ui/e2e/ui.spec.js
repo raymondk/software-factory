@@ -123,7 +123,7 @@ test("relates tickets and marks the blocked one", async ({ page, server }) => {
 
 test("shows a run's log live and a worker's whole log", async ({ page, server }) => {
   await server.api("/tickets", { method: "POST", body: { title: "Logged", state: "ready" } });
-  const w = await server.api("/workers", { method: "POST", body: { worker_type: "default" } });
+  const w = await server.api("/workers", { method: "POST", body: { agent: "claude-code" } });
   const asWorker = async (p, body) => {
     const r = await fetch(server.url + p, { method: "POST", headers: { Authorization: "Bearer " + w.token, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return r.status === 204 ? null : r.json();
@@ -141,7 +141,7 @@ test("shows a run's log live and a worker's whole log", async ({ page, server })
   await asWorker(`/workers/${w.id}/logs`, { run: job.run, lines: ["second line", ev] });
   await expect(log).toContainText("second line");
   await expect(log).not.toContainText("worker starting");
-  // The worker type's agent is claude-code, so the stream-json line renders as a tool block until toggled to raw.
+  // The worker's agent is claude-code, so the stream-json line renders as a tool block until toggled to raw.
   await expect(log.locator(".ev.tool summary")).toHaveText("Bash");
   await page.click("#detail button.log-view:text-is(\"Raw\")");
   await expect(log.locator(".ev")).toHaveCount(0);
@@ -171,10 +171,10 @@ test("reorders with Alt+ArrowDown and by dragging", async ({ page, server }) => 
 });
 
 test("shows a worker in the Workers panel", async ({ page, server }) => {
-  const w = await server.api("/workers", { method: "POST", body: { worker_type: "default" } });
+  const w = await server.api("/workers", { method: "POST", body: { agent: "claude-code" } });
   await page.goto("/");
   const row = page.locator("#workers tr", { hasText: w.id });
-  await expect(row).toContainText("default");
+  await expect(row).toContainText("claude-code");
   await expect(row).toContainText("starting");
 });
 

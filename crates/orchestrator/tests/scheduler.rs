@@ -20,15 +20,12 @@ heartbeat_timeout = "60s"
 max_workers = 3
 [provider]
 url = "unused"
-[worker_types.default]
-agent = "claude-code"
+[agents.claude-code]
 run_timeout = "1h"
-[worker_types.default.prompts]
+[agents.codex]
+run_timeout = "1h"
+[prompts]
 ready = "work"
-[worker_types.reviewer]
-agent = "claude-code"
-run_timeout = "1h"
-[worker_types.reviewer.prompts]
 in_review = "review"
 "#;
 
@@ -92,8 +89,8 @@ async fn ticket(pool: &SqlitePool, state: &str, assignee: Option<&str>) {
 }
 
 /// A worker record in `status`, also running at the provider unless `status` is `dead` and `listed` is false.
-async fn worker(pool: &SqlitePool, config: &Config, fake: &Shared, worker_type: &str, status: &str, listed: bool) -> String {
-    let w = api::new_worker(pool, config, worker_type).await.ok().unwrap();
+async fn worker(pool: &SqlitePool, config: &Config, fake: &Shared, agent: &str, status: &str, listed: bool) -> String {
+    let w = api::new_worker(pool, config, agent).await.ok().unwrap();
     sqlx::query("UPDATE workers SET status = ?2 WHERE id = ?1").bind(&w.id).bind(status).execute(pool).await.unwrap();
     if listed {
         fake.lock().unwrap().running.push(w.id.clone());
@@ -102,7 +99,7 @@ async fn worker(pool: &SqlitePool, config: &Config, fake: &Shared, worker_type: 
 }
 
 async fn statuses(pool: &SqlitePool) -> Vec<(String, String, String)> {
-    sqlx::query_as("SELECT id, worker_type, status FROM workers ORDER BY id").fetch_all(pool).await.unwrap()
+    sqlx::query_as("SELECT id, agent, status FROM workers ORDER BY id").fetch_all(pool).await.unwrap()
 }
 
 #[tokio::test]
@@ -116,14 +113,15 @@ async fn starts_one_worker_per_ticket_up_to_max_workers() {
     ticket(&pool, "ready", Some("w-busy")).await; // taken
 
     scheduler::tick(&pool, &config, &provider).await.unwrap();
+    // Prompts are shared, so every worker runs the first configured agent.
     let workers = statuses(&pool).await;
-    assert_eq!(workers.iter().filter(|(_, t, s)| t == "default" && s == "starting").count(), 2);
-    assert_eq!(workers.iter().filter(|(_, t, s)| t == "reviewer" && s == "starting").count(), 1);
+    assert_eq!(workers.iter().filter(|(_, a, s)| a == "claude-code" && s == "starting").count(), 3);
     let starts = fake.lock().unwrap().starts.clone();
     assert_eq!(starts.len(), 3);
     let ids: Vec<&String> = workers.iter().map(|(id, _, _)| id).collect();
     for s in &starts {
         assert!(ids.contains(&&s.worker_id));
+        assert_eq!(s.agent, "claude-code");
         assert_eq!(s.orchestrator_url, "http://127.0.0.1:8080");
         assert!(!s.worker_token.is_empty());
     }
@@ -170,8 +168,8 @@ async fn pending_workers_count_toward_wanted() {
     for _ in 0..3 {
         ticket(&pool, "ready", None).await;
     }
-    worker(&pool, &config, &fake, "default", "starting", true).await;
-    worker(&pool, &config, &fake, "default", "idle", true).await;
+    worker(&pool, &config, &fake, "claude-code", "starting", true).await;
+    worker(&pool, &config, &fake, "claude-code", "idle", true).await;
     scheduler::tick(&pool, &config, &provider).await.unwrap();
     assert_eq!(fake.lock().unwrap().starts.len(), 1);
     assert_eq!(statuses(&pool).await.len(), 3);
@@ -180,19 +178,29 @@ async fn pending_workers_count_toward_wanted() {
 }
 
 #[tokio::test]
-async fn stops_idle_workers_of_empty_types_but_not_busy_ones() {
+async fn stops_idle_workers_when_the_queue_is_empty_but_not_busy_ones() {
     let (pool, config, provider, fake, _dir) = setup(10).await;
-    let idle = worker(&pool, &config, &fake, "default", "idle", true).await;
-    let busy = worker(&pool, &config, &fake, "default", "busy", true).await;
-    let starting = worker(&pool, &config, &fake, "default", "starting", true).await;
-    let reviewer = worker(&pool, &config, &fake, "reviewer", "idle", true).await;
-    ticket(&pool, "in_review", None).await; // reviewer still has work
+    let idle = worker(&pool, &config, &fake, "claude-code", "idle", true).await;
+    let busy = worker(&pool, &config, &fake, "claude-code", "busy", true).await;
+    let starting = worker(&pool, &config, &fake, "claude-code", "starting", true).await;
+    let codex = worker(&pool, &config, &fake, "codex", "idle", true).await;
+    ticket(&pool, "in_review", None).await; // work for anyone: nothing is stopped, and the starting worker covers it
     scheduler::tick(&pool, &config, &provider).await.unwrap();
-    assert_eq!(fake.lock().unwrap().stops, vec![idle.clone()]);
+    assert!(fake.lock().unwrap().stops.is_empty());
+    assert!(fake.lock().unwrap().starts.is_empty());
+    assert_eq!(status_of(&pool, &codex).await, "idle");
+
+    sqlx::query("UPDATE tickets SET assignee = 'someone'").execute(&pool).await.unwrap();
+    scheduler::tick(&pool, &config, &provider).await.unwrap();
+    let mut stops = fake.lock().unwrap().stops.clone();
+    stops.sort();
+    let mut expected = vec![idle.clone(), codex.clone()];
+    expected.sort();
+    assert_eq!(stops, expected);
     assert_eq!(status_of(&pool, &idle).await, "dead");
+    assert_eq!(status_of(&pool, &codex).await, "dead");
     assert_eq!(status_of(&pool, &busy).await, "busy");
     assert_eq!(status_of(&pool, &starting).await, "starting");
-    assert_eq!(status_of(&pool, &reviewer).await, "idle");
     assert!(fake.lock().unwrap().starts.is_empty());
 }
 
@@ -204,8 +212,8 @@ async fn status_of(pool: &SqlitePool, id: &str) -> String {
 #[tokio::test]
 async fn dead_workers_still_listed_by_provider_are_stopped() {
     let (pool, config, provider, fake, _dir) = setup(10).await;
-    let reaped = worker(&pool, &config, &fake, "default", "dead", true).await;
-    let gone = worker(&pool, &config, &fake, "default", "dead", false).await;
+    let reaped = worker(&pool, &config, &fake, "claude-code", "dead", true).await;
+    let gone = worker(&pool, &config, &fake, "claude-code", "dead", false).await;
     scheduler::tick(&pool, &config, &provider).await.unwrap();
     assert_eq!(fake.lock().unwrap().stops, vec![reaped.clone()]);
     assert!(fake.lock().unwrap().running.is_empty());
@@ -216,9 +224,9 @@ async fn dead_workers_still_listed_by_provider_are_stopped() {
 #[tokio::test]
 async fn unknown_provider_workers_are_stopped() {
     let (pool, config, provider, fake, _dir) = setup(10).await;
-    let starting = worker(&pool, &config, &fake, "default", "starting", true).await;
-    let idle = worker(&pool, &config, &fake, "default", "idle", true).await;
-    let busy = worker(&pool, &config, &fake, "default", "busy", true).await;
+    let starting = worker(&pool, &config, &fake, "claude-code", "starting", true).await;
+    let idle = worker(&pool, &config, &fake, "claude-code", "idle", true).await;
+    let busy = worker(&pool, &config, &fake, "claude-code", "busy", true).await;
     ticket(&pool, "ready", None).await; // idle still has work
     fake.lock().unwrap().running.push("w-unknown".into());
     scheduler::tick(&pool, &config, &provider).await.unwrap();

@@ -18,17 +18,13 @@ heartbeat_timeout = "60s"
 max_workers = 4
 [provider]
 url = "http://localhost:8081"
-[worker_types.default]
-agent = "claude-code"
+[agents.claude-code]
 run_timeout = "1h"
-[worker_types.default.prompts]
+[agents.codex]
+run_timeout = "2h"
+[prompts]
 ready = "Work on #{{ticket.id}} ({{ticket.state}}): {{ticket.title}}\n{{ticket.description}}"
 in_progress = "Resume #{{ticket.id}}"
-[worker_types.reviewer]
-agent = "claude-code"
-run_timeout = "1h"
-[worker_types.reviewer.prompts]
-in_review = "Review #{{ticket.id}}"
 "#;
 
 async fn serve() -> (String, tempfile::TempDir) {
@@ -42,9 +38,9 @@ fn status<T: std::fmt::Debug>(r: Result<T, Error>) -> u16 {
     }
 }
 
-/// Creates a worker of `worker_type` and returns it with a client authenticated as it.
-async fn worker(url: &str, human: &Client, worker_type: &str) -> (NewWorker, Client) {
-    let w = human.create_worker(&CreateWorker { worker_type: worker_type.into() }).await.unwrap();
+/// Creates a worker of `agent` and returns it with a client authenticated as it.
+async fn worker(url: &str, human: &Client, agent: &str) -> (NewWorker, Client) {
+    let w = human.create_worker(&CreateWorker { agent: agent.into() }).await.unwrap();
     let client = Client::new(url, &w.token);
     (w, client)
 }
@@ -63,14 +59,14 @@ fn set_state(state: &str) -> UpdateTicket {
 async fn create_register_heartbeat_list() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "default").await;
-    assert_eq!(w.worker_type, "default");
+    let (w, wc) = worker(&url, &human, "claude-code").await;
+    assert_eq!(w.agent, "claude-code");
     assert!(w.id.len() >= 8 && w.token.len() >= 32);
 
     let listed = human.list_workers().await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!((listed[0].id.as_str(), listed[0].status.as_str(), listed[0].last_heartbeat.as_deref(), listed[0].ticket), (w.id.as_str(), "starting", None, None));
-    assert_eq!(listed[0].agent.as_deref(), Some("claude-code"));
+    assert_eq!(listed[0].agent, "claude-code");
     // Never the token, in any representation.
     let raw = serde_json::to_string(&listed).unwrap();
     assert!(!raw.contains(&w.token) && !raw.contains("token"));
@@ -85,16 +81,16 @@ async fn create_register_heartbeat_list() {
     // Workers may list workers too.
     assert_eq!(wc.list_workers().await.unwrap()[0].status, "idle");
 
-    assert_eq!(status(human.create_worker(&CreateWorker { worker_type: "nope".into() }).await), 400);
-    assert_eq!(status(wc.create_worker(&CreateWorker { worker_type: "default".into() }).await), 403);
+    assert_eq!(status(human.create_worker(&CreateWorker { agent: "nope".into() }).await), 400);
+    assert_eq!(status(wc.create_worker(&CreateWorker { agent: "claude-code".into() }).await), 403);
 }
 
 #[tokio::test]
 async fn worker_token_authenticates_only_itself() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (a, ac) = worker(&url, &human, "default").await;
-    let (b, _) = worker(&url, &human, "default").await;
+    let (a, ac) = worker(&url, &human, "claude-code").await;
+    let (b, _) = worker(&url, &human, "claude-code").await;
 
     for other in [b.id.as_str(), "w-missing"] {
         assert_eq!(status(ac.register(other).await), 403);
@@ -113,10 +109,10 @@ async fn worker_token_authenticates_only_itself() {
 }
 
 #[tokio::test]
-async fn poll_takes_lowest_ranked_available_for_type() {
+async fn poll_takes_lowest_ranked_available() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "default").await;
+    let (w, wc) = worker(&url, &human, "claude-code").await;
     wc.register(&w.id).await.unwrap();
 
     let todo = ticket(&human, "todo", "todo").await;
@@ -143,17 +139,18 @@ async fn poll_takes_lowest_ranked_available_for_type() {
     assert_eq!(p.ticket.id, ready1);
     assert_eq!(p.prompt, format!("Work on #{ready1} (ready): ready1\nabout ready1"));
 
-    // Nothing left for this type: idle, 204.
+    // Nothing left: idle, 204. States without a prompt are never handed out.
     assert!(wc.poll(&w.id, None).await.unwrap().is_none());
     assert_eq!(human.list_workers().await.unwrap()[0].status, "idle");
     assert_eq!(human.get_ticket(review).await.unwrap().assignee, None);
     assert_eq!(human.get_ticket(todo).await.unwrap().assignee, None);
 
-    // The reviewer type only sees in_review.
-    let (r, rc) = worker(&url, &human, "reviewer").await;
-    let p = rc.poll(&r.id, None).await.unwrap().expect("a ticket");
-    assert_eq!((p.ticket.id, p.prompt.as_str()), (review, format!("Review #{review}").as_str()));
-    assert!(rc.poll(&r.id, None).await.unwrap().is_none());
+    // Prompts are shared: another agent sees the same queue, with its own run_timeout.
+    let (c, cc) = worker(&url, &human, "codex").await;
+    assert!(cc.poll(&c.id, None).await.unwrap().is_none());
+    let again = ticket(&human, "again", "ready").await;
+    let p = cc.poll(&c.id, None).await.unwrap().expect("a ticket");
+    assert_eq!((p.ticket.id, p.run_timeout), (again, std::time::Duration::from_secs(7200)));
 }
 
 fn lines(run: Option<i64>, lines: &[&str]) -> ShipLogs {
@@ -164,8 +161,8 @@ fn lines(run: Option<i64>, lines: &[&str]) -> ShipLogs {
 async fn poll_opens_a_run_usage_ends_it_and_logs_are_kept_per_worker_and_run() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "default").await;
-    let (w2, wc2) = worker(&url, &human, "default").await;
+    let (w, wc) = worker(&url, &human, "claude-code").await;
+    let (w2, wc2) = worker(&url, &human, "claude-code").await;
     let t = ticket(&human, "a", "ready").await;
 
     wc.ship_logs(&w.id, &lines(None, &["starting"])).await.unwrap();
@@ -174,7 +171,7 @@ async fn poll_opens_a_run_usage_ends_it_and_logs_are_kept_per_worker_and_run() {
     let runs = human.get_ticket(t).await.unwrap().runs;
     assert_eq!((runs.len(), runs[0].id, runs[0].worker_id.as_str(), runs[0].ticket_id), (1, run, w.id.as_str(), t));
     assert!(runs[0].ended_at.is_none() && !runs[0].started_at.is_empty());
-    assert_eq!(runs[0].agent.as_deref(), Some("claude-code"));
+    assert_eq!(runs[0].agent, "claude-code");
 
     wc.ship_logs(&w.id, &lines(Some(run), &["a", "b"])).await.unwrap();
     assert_eq!(status(wc2.ship_logs(&w2.id, &lines(Some(run), &["x"])).await), 400, "another worker's run");
@@ -208,7 +205,7 @@ async fn poll_opens_a_run_usage_ends_it_and_logs_are_kept_per_worker_and_run() {
 async fn poll_skips_ready_tickets_with_unfinished_dependencies() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, worker) = worker(&url, &human, "default").await;
+    let (w, worker) = worker(&url, &human, "claude-code").await;
     let dep = ticket(&human, "dep", "todo").await;
     let t = ticket(&human, "blocked", "ready").await;
     human.add_relation(t, &CreateRelation { r#type: "depends_on".into(), ticket: dep }).await.unwrap();
@@ -239,7 +236,7 @@ async fn poll_skips_ready_tickets_with_unfinished_dependencies() {
 async fn poll_exclude_is_last_in_line() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "default").await;
+    let (w, wc) = worker(&url, &human, "claude-code").await;
     let first = ticket(&human, "first", "ready").await;
     let second = ticket(&human, "second", "ready").await;
     // Other work available: the excluded ticket is skipped.
@@ -260,7 +257,7 @@ async fn concurrent_polls_never_share_a_ticket() {
     let barrier = Arc::new(Barrier::new(5));
     let mut handles = vec![];
     for _ in 0..5 {
-        let (w, wc) = worker(&url, &human, "default").await;
+        let (w, wc) = worker(&url, &human, "claude-code").await;
         let barrier = barrier.clone();
         handles.push(tokio::spawn(async move {
             barrier.wait().await;
@@ -288,8 +285,8 @@ async fn concurrent_polls_never_share_a_ticket() {
 async fn acl_workers_modify_only_held_tickets() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "default").await;
-    let (other, oc) = worker(&url, &human, "default").await;
+    let (w, wc) = worker(&url, &human, "claude-code").await;
+    let (other, oc) = worker(&url, &human, "claude-code").await;
     let mine = ticket(&human, "mine", "ready").await;
     let theirs = ticket(&human, "theirs", "todo").await;
     assert_eq!(wc.poll(&w.id, None).await.unwrap().unwrap().ticket.id, mine);
@@ -330,7 +327,7 @@ async fn acl_workers_modify_only_held_tickets() {
 async fn state_change_clears_assignee() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "default").await;
+    let (w, wc) = worker(&url, &human, "claude-code").await;
     let id = ticket(&human, "a", "ready").await;
     wc.poll(&w.id, None).await.unwrap().unwrap();
 
@@ -356,8 +353,8 @@ async fn state_change_clears_assignee() {
 async fn worker_keeps_ticket_it_moves_to_in_progress() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "default").await;
-    let (other, oc) = worker(&url, &human, "default").await;
+    let (w, wc) = worker(&url, &human, "claude-code").await;
+    let (other, oc) = worker(&url, &human, "claude-code").await;
     let id = ticket(&human, "a", "ready").await;
     assert_eq!(wc.poll(&w.id, None).await.unwrap().unwrap().ticket.id, id);
 
@@ -382,13 +379,13 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     let (url, dir) = common::serve(&CONFIG.replace("\"60s\"", "\"200ms\"")).await;
     let pool = orchestrator::db::open(&dir.path().join("test.db")).await.unwrap();
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "default").await;
+    let (w, wc) = worker(&url, &human, "claude-code").await;
     wc.register(&w.id).await.unwrap();
     let id = ticket(&human, "a", "in_progress").await;
     assert_eq!(wc.poll(&w.id, None).await.unwrap().unwrap().ticket.id, id);
     // Never registers: reaped from its creation time.
-    let (silent, sc) = worker(&url, &human, "default").await;
-    let (live, lc) = worker(&url, &human, "default").await;
+    let (silent, sc) = worker(&url, &human, "claude-code").await;
+    let (live, lc) = worker(&url, &human, "claude-code").await;
     lc.register(&live.id).await.unwrap();
 
     assert!(orchestrator::reaper::reap(&pool, timeout).await.unwrap().is_empty());
@@ -419,7 +416,7 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     lc.heartbeat(&live.id).await.unwrap();
 
     // The next poll resumes the ticket.
-    let (f, fc) = worker(&url, &human, "default").await;
+    let (f, fc) = worker(&url, &human, "claude-code").await;
     fc.register(&f.id).await.unwrap();
     let p = fc.poll(&f.id, None).await.unwrap().expect("the freed ticket");
     assert_eq!((p.ticket.id, p.ticket.assignee.as_deref(), p.prompt.as_str()), (id, Some(f.id.as_str()), format!("Resume #{id}").as_str()));
@@ -437,13 +434,13 @@ fn totals(t: &Totals) -> (i64, i64, f64, i64, i64) {
 async fn usage_is_attributed_and_scoped_to_the_reporting_worker() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
-    let (w, wc) = worker(&url, &human, "reviewer").await;
-    let (other, oc) = worker(&url, &human, "default").await;
+    let (w, wc) = worker(&url, &human, "codex").await;
+    let (other, oc) = worker(&url, &human, "claude-code").await;
     let id = ticket(&human, "a", "ready").await;
 
     // No need to hold the ticket: usage is reported after the run, which may have released it.
     let u = wc.report_usage(&w.id, &usage(id, 100, 20, 0.25)).await.unwrap();
-    assert_eq!((u.ticket_id, u.worker_id.as_str(), u.worker_type.as_str()), (id, w.id.as_str(), "reviewer"));
+    assert_eq!((u.ticket_id, u.worker_id.as_str(), u.agent.as_str()), (id, w.id.as_str(), "codex"));
     assert_eq!((u.tokens_in, u.tokens_out, u.cost), (100, 20, 0.25));
     assert!(u.id > 0 && !u.created_at.is_empty());
 
@@ -457,7 +454,7 @@ async fn usage_is_attributed_and_scoped_to_the_reporting_worker() {
     assert_eq!(m.per_ticket.len(), 1);
     assert_eq!((m.per_ticket[0].key.ticket_id, m.per_ticket[0].totals.tokens_in), (id, 100));
     assert_eq!(m.per_worker[0].key.worker_id, w.id);
-    assert_eq!(m.per_worker_type[0].key.worker_type, "reviewer");
+    assert_eq!(m.per_agent[0].key.agent, "codex");
     // Workers may read metrics too.
     assert_eq!(oc.metrics().await.unwrap().totals.tokens_in, 100);
 }
@@ -467,8 +464,8 @@ async fn metrics_aggregate_and_count_ticket_states() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
     assert_eq!(totals(&human.metrics().await.unwrap().totals), (0, 0, 0.0, 0, 0));
-    let (a, ac) = worker(&url, &human, "default").await;
-    let (b, bc) = worker(&url, &human, "default").await;
+    let (a, ac) = worker(&url, &human, "claude-code").await;
+    let (b, bc) = worker(&url, &human, "claude-code").await;
     let t1 = ticket(&human, "t1", "ready").await;
     let t2 = ticket(&human, "t2", "ready").await;
     // Done without any usage: counted in totals only.
@@ -487,8 +484,8 @@ async fn metrics_aggregate_and_count_ticket_states() {
     let mut expected = vec![(a.id.as_str(), (300, 30, 3.0, 0, 0)), (b.id.as_str(), (1050, 105, 4.5, 0, 0))];
     expected.sort_by(|x, y| x.0.cmp(y.0));
     assert_eq!(per_worker, expected, "ordered by worker id");
-    assert_eq!(m.per_worker_type.len(), 1);
-    assert_eq!((m.per_worker_type[0].key.worker_type.as_str(), totals(&m.per_worker_type[0].totals)), ("default", (1350, 135, 7.5, 0, 0)));
+    assert_eq!(m.per_agent.len(), 1);
+    assert_eq!((m.per_agent[0].key.agent.as_str(), totals(&m.per_agent[0].totals)), ("claude-code", (1350, 135, 7.5, 0, 0)));
 
     // States decide completed/failed: t1 done, t2 failed. A and B both touched t1; only B touched t2.
     human.update_ticket(t1, &set_state("done")).await.unwrap();
@@ -500,7 +497,7 @@ async fn metrics_aggregate_and_count_ticket_states() {
     let by_worker: std::collections::HashMap<_, _> =
         m.per_worker.iter().map(|x| (x.key.worker_id.as_str(), (x.totals.tickets_completed, x.totals.tickets_failed))).collect();
     assert_eq!((by_worker[a.id.as_str()], by_worker[b.id.as_str()]), ((1, 0), (1, 1)));
-    assert_eq!((m.per_worker_type[0].totals.tickets_completed, m.per_worker_type[0].totals.tickets_failed), (1, 1));
+    assert_eq!((m.per_agent[0].totals.tickets_completed, m.per_agent[0].totals.tickets_failed), (1, 1));
     // Reverting a state reverts the count.
     human.update_ticket(t2, &set_state("in_review")).await.unwrap();
     assert_eq!(human.metrics().await.unwrap().totals.tickets_failed, 0);

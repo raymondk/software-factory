@@ -22,13 +22,12 @@ echo "Configs and logs in $tmp"
 if [ "$agent" = command ]; then
   sleep=${DEMO_SLEEP:-${DEMO_KILL:+30}}
   sleep=${sleep:-5}
-  sed -e 's/^heartbeat_timeout = .*/heartbeat_timeout = "10s"/' -e '/^\[worker_types/,$d' demo/factory.toml > "$tmp/factory.toml"
+  sed -e 's/^heartbeat_timeout = .*/heartbeat_timeout = "10s"/' -e '/^\[agents/,$d' demo/factory.toml > "$tmp/factory.toml"
   cat >> "$tmp/factory.toml" <<TOML
-[worker_types.default]
-agent = "command"
+[agents.command]
 run_timeout = "30m"
 
-[worker_types.default.prompts]
+[prompts]
 ready = '''
 set -e
 factory ticket edit {{ticket.id}} --state in_progress > /dev/null
@@ -49,7 +48,6 @@ TOML
   sed '/^\[worker_env\]/,$d' demo/provider.toml > "$tmp/provider.toml"
   cat >> "$tmp/provider.toml" <<'TOML'
 [worker_env]
-FACTORY_AGENT = "command"
 FACTORY_AGENT_COMMAND = "/bin/sh"
 FACTORY_HEARTBEAT_INTERVAL = "2s"
 FACTORY_POLL_INTERVAL = "2s"

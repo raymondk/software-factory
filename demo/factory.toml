@@ -17,11 +17,10 @@ interval = "2s"
 [provider]
 url = "http://localhost:8081"
 
-[worker_types.default]
-agent = "claude-code"
+[agents.claude-code]
 run_timeout = "30m"
 
-[worker_types.default.prompts]
+[prompts]
 ready = """
 You are working on ticket {{ticket.id}}: {{ticket.title}}.
 Read the ticket and its comments with the factory CLI.

@@ -85,7 +85,7 @@ async fn start(url: &str, worker_id: &str) -> reqwest::Response {
         .post(format!("{url}/workers"))
         .json(&json!({
             "worker_id": worker_id,
-            "worker_type": "default",
+            "agent": "claude-code",
             "orchestrator_url": "http://orchestrator:8080",
             "worker_token": "worker-secret",
         }))
@@ -125,7 +125,7 @@ async fn start_sets_env_and_stop_removes() {
         "FACTORY_TOKEN=worker-secret",
         &format!("FACTORY_WORKER_ID={id}"),
         "FACTORY_WORKER_TOKEN=worker-secret",
-        "FACTORY_WORKER_TYPE=default",
+        "FACTORY_AGENT=claude-code",
         "GIT_TOKEN=git-secret",
     ] {
         assert!(env.iter().any(|e| e == expected), "missing {expected} in {env:?}");

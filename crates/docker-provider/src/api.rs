@@ -21,7 +21,7 @@ pub fn router(state: AppState) -> Router {
 #[derive(Debug, Deserialize)]
 pub struct StartWorker {
     pub worker_id: String,
-    pub worker_type: String,
+    pub agent: String,
     pub orchestrator_url: String,
     pub worker_token: String,
 }
@@ -97,7 +97,7 @@ async fn start_worker(
     env.insert("FACTORY_TOKEN".into(), req.worker_token.clone());
     env.insert("FACTORY_WORKER_ID".into(), req.worker_id.clone());
     env.insert("FACTORY_WORKER_TOKEN".into(), req.worker_token);
-    env.insert("FACTORY_WORKER_TYPE".into(), req.worker_type);
+    env.insert("FACTORY_AGENT".into(), req.agent);
     let container_id = docker::run(&state.config.docker.image, &req.worker_id, &env).await?;
     workers.insert(req.worker_id.clone(), container_id.clone());
     let worker = Worker { worker_id: req.worker_id, container_id, status: "running".into() };
