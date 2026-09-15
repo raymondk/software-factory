@@ -165,6 +165,9 @@ pub struct ListTickets {
 pub struct Worker {
     pub id: String,
     pub agent: String,
+    /// The provider running it, by its name in orchestrator config.
+    #[serde(default)]
+    pub provider: String,
     /// One of: starting, idle, busy, dead
     pub status: String,
     pub created_at: String,
@@ -175,6 +178,9 @@ pub struct Worker {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWorker {
     pub agent: String,
+    /// Defaults to the first configured provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// Returned once, at creation: the only time the token is visible.
@@ -182,6 +188,8 @@ pub struct CreateWorker {
 pub struct NewWorker {
     pub id: String,
     pub agent: String,
+    #[serde(default)]
+    pub provider: String,
     pub token: String,
 }
 

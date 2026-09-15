@@ -168,6 +168,7 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
     if !STATES.contains(&state_name) {
         return Err(ApiError::BadRequest("invalid state"));
     }
+    check_advertised(&state, req.agent.as_deref(), req.model.as_deref())?;
     let row: Row = sqlx::query_as(&format!(
         "INSERT INTO tickets (title, description, state, rank, created_at, updated_at, agent, model) \
          VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(rank), 0) + 1 FROM tickets), {NOW}, {NOW}, ?4, ?5) \
@@ -181,6 +182,18 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
     .fetch_one(&state.pool)
     .await?;
     Ok((StatusCode::CREATED, Json(row.into())))
+}
+
+/// Spec 3.6: an agent or model on a ticket must be advertised together by some provider's last status.
+fn check_advertised(state: &AppState, agent: Option<&str>, model: Option<&str>) -> Result<(), ApiError> {
+    if (agent.is_some() || model.is_some()) && !state.providers.advertised(agent, model) {
+        return Err(ApiError::BadRequest(match (agent, model) {
+            (Some(_), None) => "agent not advertised by any provider",
+            (None, Some(_)) => "model not advertised by any provider",
+            _ => "agent and model not advertised together by any provider",
+        }));
+    }
+    Ok(())
 }
 
 // The list leaves `comments` empty; only GET /tickets/{id} embeds the thread, to avoid a query per ticket.
@@ -420,6 +433,13 @@ async fn update_ticket(
         return Err(ApiError::BadRequest("invalid state"));
     }
     authorize(&caller, &state.pool, id).await?;
+    if req.agent.is_some() || req.model.is_some() {
+        let (agent, model): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT agent, model FROM tickets WHERE id = ?1").bind(id).fetch_optional(&state.pool).await?.ok_or(ApiError::NotFound)?;
+        let agent = req.agent.clone().unwrap_or(agent);
+        let model = req.model.clone().unwrap_or(model);
+        check_advertised(&state, agent.as_deref(), model.as_deref())?;
+    }
     // Spec 3.2: a state change clears the assignee unless the same patch sets it, or the holding worker moves it to
     // in_progress (authorize guarantees a worker caller is the assignee).
     let keep = matches!(caller, Caller::Worker(_)) && req.state.as_deref() == Some("in_progress");
@@ -504,6 +524,7 @@ async fn move_ticket(
 struct WorkerRow {
     id: String,
     agent: String,
+    provider: String,
     status: String,
     created_at: String,
     last_heartbeat: Option<String>,
@@ -512,28 +533,32 @@ struct WorkerRow {
 
 impl From<WorkerRow> for Worker {
     fn from(r: WorkerRow) -> Worker {
-        Worker { id: r.id, agent: r.agent, status: r.status, created_at: r.created_at, last_heartbeat: r.last_heartbeat, ticket: r.ticket }
+        Worker { id: r.id, agent: r.agent, provider: r.provider, status: r.status, created_at: r.created_at, last_heartbeat: r.last_heartbeat, ticket: r.ticket }
     }
 }
 
 /// Worker columns for the API: everything but the token, plus the ticket it holds.
-const WORKER_COLUMNS: &str = "id, agent, status, created_at, last_heartbeat, \
+const WORKER_COLUMNS: &str = "id, agent, provider, status, created_at, last_heartbeat, \
     (SELECT t.id FROM tickets t WHERE t.assignee = workers.id ORDER BY t.rank ASC, t.id ASC LIMIT 1) AS ticket";
 
-/// Creates a worker record with a fresh id and token. Also used by the scheduler.
-pub async fn new_worker(db: impl SqliteExecutor<'_>, config: &Config, agent: &str) -> Result<NewWorker, ApiError> {
+/// Creates a worker record with a fresh id and token, to run `agent` on `provider`. Also used by the scheduler.
+pub async fn new_worker(db: impl SqliteExecutor<'_>, config: &Config, agent: &str, provider: &str) -> Result<NewWorker, ApiError> {
     if !config.agents.contains_key(agent) {
         return Err(ApiError::BadRequest("unknown agent"));
     }
-    let (id, agent, token): (String, String, String) = sqlx::query_as(&format!(
-        "INSERT INTO workers (id, agent, token, status, created_at) \
-         VALUES ('w-' || lower(hex(randomblob(4))), ?1, lower(hex(randomblob(24))), 'starting', {NOW}) \
-         RETURNING id, agent, token"
+    if !config.providers.contains_key(provider) {
+        return Err(ApiError::BadRequest("unknown provider"));
+    }
+    let (id, agent, provider, token): (String, String, String, String) = sqlx::query_as(&format!(
+        "INSERT INTO workers (id, agent, provider, token, status, created_at) \
+         VALUES ('w-' || lower(hex(randomblob(4))), ?1, ?2, lower(hex(randomblob(24))), 'starting', {NOW}) \
+         RETURNING id, agent, provider, token"
     ))
     .bind(agent)
+    .bind(provider)
     .fetch_one(db)
     .await?;
-    Ok(NewWorker { id, agent, token })
+    Ok(NewWorker { id, agent, provider, token })
 }
 
 async fn create_worker(
@@ -544,7 +569,9 @@ async fn create_worker(
     if !matches!(caller, Caller::Human) {
         return Err(ApiError::Forbidden);
     }
-    Ok((StatusCode::CREATED, Json(new_worker(&state.pool, &state.config, &req.agent).await?)))
+    // The first configured provider unless the request names one.
+    let provider = req.provider.as_deref().unwrap_or_else(|| state.config.providers.keys().next().unwrap());
+    Ok((StatusCode::CREATED, Json(new_worker(&state.pool, &state.config, &req.agent, provider).await?)))
 }
 
 async fn list_workers(State(state): State<AppState>) -> Result<Json<Vec<Worker>>, ApiError> {
@@ -581,7 +608,7 @@ async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<C
 }
 
 /// Hands the worker the lowest-ranked unassigned, unblocked ticket in a state that has a prompt, whose `agent` is unset
-/// or the worker's. 204 when there is none.
+/// or the worker's, and whose `model` is unset or one the worker's provider advertises for that agent. 204 when there is none.
 async fn poll(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -593,15 +620,16 @@ async fn poll(
     let mut conn = state.pool.acquire().await?;
     // IMMEDIATE serializes polls so two workers never pick the same ticket.
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
-    let (agent_name,): (String,) =
-        sqlx::query_as("SELECT agent FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
+    let (agent_name, provider): (String, String) =
+        sqlx::query_as("SELECT agent, provider FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
     let agent = state.config.agents.get(&agent_name).ok_or(ApiError::BadRequest("unknown agent"))?;
+    let models = serde_json::to_string(&state.providers.models(&provider, &agent_name)).unwrap();
     let prompts = &state.config.prompts;
     let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET assignee = ?1, updated_at = {NOW} WHERE id = \
          (SELECT id FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?2)) AND NOT {BLOCKED} \
-          AND (agent IS NULL OR agent = ?4) \
+          AND (agent IS NULL OR agent = ?4) AND (model IS NULL OR model IN (SELECT value FROM json_each(?5))) \
           ORDER BY id IS ?3, rank ASC, id ASC LIMIT 1) \
          RETURNING {COLUMNS}"
     ))
@@ -609,6 +637,7 @@ async fn poll(
     .bind(format!("[{}]", states.join(",")))
     .bind(exclude)
     .bind(&agent_name)
+    .bind(models)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {

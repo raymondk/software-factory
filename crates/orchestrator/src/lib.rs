@@ -13,4 +13,5 @@ pub const STATES: [&str; 6] = ["todo", "ready", "in_progress", "in_review", "fai
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
     pub config: Arc<config::Config>,
+    pub providers: Arc<provider::Providers>,
 }

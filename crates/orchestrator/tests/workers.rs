@@ -16,8 +16,10 @@ token = "x"
 heartbeat_timeout = "60s"
 [scheduler]
 max_workers = 4
-[provider]
+[providers.a]
 url = "http://localhost:8081"
+[providers.b]
+url = "http://localhost:8082"
 [agents.claude-code]
 run_timeout = "1h"
 [agents.codex]
@@ -38,9 +40,13 @@ fn status<T: std::fmt::Debug>(r: Result<T, Error>) -> u16 {
     }
 }
 
-/// Creates a worker of `agent` and returns it with a client authenticated as it.
+/// Creates a worker of `agent` on the default provider and returns it with a client authenticated as it.
 async fn worker(url: &str, human: &Client, agent: &str) -> (NewWorker, Client) {
-    let w = human.create_worker(&CreateWorker { agent: agent.into() }).await.unwrap();
+    worker_on(url, human, agent, None).await
+}
+
+async fn worker_on(url: &str, human: &Client, agent: &str, provider: Option<&str>) -> (NewWorker, Client) {
+    let w = human.create_worker(&CreateWorker { agent: agent.into(), provider: provider.map(str::to_owned) }).await.unwrap();
     let client = Client::new(url, &w.token);
     (w, client)
 }
@@ -60,13 +66,13 @@ async fn create_register_heartbeat_list() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
-    assert_eq!(w.agent, "claude-code");
+    assert_eq!((w.agent.as_str(), w.provider.as_str()), ("claude-code", "a"), "the first configured provider by default");
     assert!(w.id.len() >= 8 && w.token.len() >= 32);
 
     let listed = human.list_workers().await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!((listed[0].id.as_str(), listed[0].status.as_str(), listed[0].last_heartbeat.as_deref(), listed[0].ticket), (w.id.as_str(), "starting", None, None));
-    assert_eq!(listed[0].agent, "claude-code");
+    assert_eq!((listed[0].agent.as_str(), listed[0].provider.as_str()), ("claude-code", "a"));
     // Never the token, in any representation.
     let raw = serde_json::to_string(&listed).unwrap();
     assert!(!raw.contains(&w.token) && !raw.contains("token"));
@@ -81,8 +87,35 @@ async fn create_register_heartbeat_list() {
     // Workers may list workers too.
     assert_eq!(wc.list_workers().await.unwrap()[0].status, "idle");
 
-    assert_eq!(status(human.create_worker(&CreateWorker { agent: "nope".into() }).await), 400);
-    assert_eq!(status(wc.create_worker(&CreateWorker { agent: "claude-code".into() }).await), 403);
+    assert_eq!(status(human.create_worker(&CreateWorker { agent: "nope".into(), provider: None }).await), 400);
+    assert_eq!(status(human.create_worker(&CreateWorker { agent: "claude-code".into(), provider: Some("nope".into()) }).await), 400);
+    assert_eq!(status(wc.create_worker(&CreateWorker { agent: "claude-code".into(), provider: None }).await), 403);
+    let (b, _) = worker_on(&url, &human, "codex", Some("b")).await;
+    assert_eq!(b.provider, "b");
+}
+
+#[tokio::test]
+async fn poll_hands_a_model_only_to_a_worker_whose_provider_supports_it() {
+    // Provider a runs claude-code with sonnet only; b also has opus.
+    let (url, _dir) = common::serve_with(CONFIG, |name| {
+        let mut agents = common::advertised();
+        if name == "a" {
+            agents.get_mut("claude-code").unwrap().models = vec!["sonnet".into()];
+        }
+        common::status(agents)
+    })
+    .await;
+    let human = Client::new(&url, TOKEN);
+    let (a, ac) = worker_on(&url, &human, "claude-code", Some("a")).await;
+    let (b, bc) = worker_on(&url, &human, "claude-code", Some("b")).await;
+    let opus = ticket(&human, "needs opus", "ready").await;
+    human.update_ticket(opus, &UpdateTicket { model: Some(Some("opus".into())), ..Default::default() }).await.unwrap();
+    let any = ticket(&human, "any model", "ready").await;
+
+    assert_eq!(ac.poll(&a.id, None).await.unwrap().unwrap().ticket.id, any, "a skips the opus ticket");
+    assert!(ac.poll(&a.id, None).await.unwrap().is_none());
+    let p = bc.poll(&b.id, None).await.unwrap().expect("a ticket");
+    assert_eq!((p.ticket.id, p.model.as_deref()), (opus, Some("opus")));
 }
 
 #[tokio::test]

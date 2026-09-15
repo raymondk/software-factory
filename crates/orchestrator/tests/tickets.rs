@@ -14,6 +14,27 @@ fn new(title: &str) -> CreateTicket {
 }
 
 #[tokio::test]
+async fn agent_and_model_must_be_advertised_together_by_a_provider() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    bad_request(client.create_ticket(&CreateTicket { agent: Some("nope".into()), ..new("a") }).await, "agent not advertised");
+    bad_request(client.create_ticket(&CreateTicket { model: Some("gpt-9".into()), ..new("a") }).await, "model not advertised");
+    bad_request(client.create_ticket(&CreateTicket { agent: Some("codex".into()), model: Some("opus".into()), ..new("a") }).await, "not advertised together");
+    // Any agent may run opus somewhere; codex only runs o3.
+    client.create_ticket(&CreateTicket { model: Some("opus".into()), ..new("a") }).await.unwrap();
+    let t = client.create_ticket(&CreateTicket { agent: Some("codex".into()), ..new("b") }).await.unwrap();
+
+    // PATCH validates the merged result: the new model against the existing agent, and the other way round.
+    bad_request(client.update_ticket(t.id, &UpdateTicket { model: Some(Some("opus".into())), ..Default::default() }).await, "not advertised together");
+    client.update_ticket(t.id, &UpdateTicket { model: Some(Some("o3".into())), ..Default::default() }).await.unwrap();
+    bad_request(client.update_ticket(t.id, &UpdateTicket { agent: Some(Some("claude-code".into())), ..Default::default() }).await, "not advertised together");
+    let u = client.update_ticket(t.id, &UpdateTicket { agent: Some(Some("claude-code".into())), model: Some(Some("opus".into())), ..Default::default() }).await.unwrap();
+    assert_eq!((u.agent.as_deref(), u.model.as_deref()), (Some("claude-code"), Some("opus")));
+    // Clearing is always fine, and other fields never trigger the check.
+    client.update_ticket(t.id, &UpdateTicket { agent: Some(None), model: Some(None), title: Some("c".into()), ..Default::default() }).await.unwrap();
+}
+
+#[tokio::test]
 async fn agent_and_model_are_optional_settable_and_clearable() {
     let (url, _dir) = serve().await;
     let client = Client::new(&url, TOKEN);

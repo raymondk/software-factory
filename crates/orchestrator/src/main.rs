@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use orchestrator::{api, config::Config, db, provider::Provider, reaper, scheduler, AppState};
+use orchestrator::{api, config::Config, db, provider::Providers, reaper, scheduler, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,8 +17,9 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(config.orchestrator.listen).await?;
     eprintln!("orchestrator for {} listening on {}", config.project.name, listener.local_addr()?);
     let config = Arc::new(config);
+    let providers = Arc::new(Providers::new(&config));
     tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));
-    tokio::spawn(scheduler::run(pool.clone(), config.clone(), Provider::new(&config.provider.url)));
-    axum::serve(listener, api::router(AppState { pool, config })).await?;
+    tokio::spawn(scheduler::run(pool.clone(), config.clone(), providers.clone()));
+    axum::serve(listener, api::router(AppState { pool, config, providers })).await?;
     Ok(())
 }

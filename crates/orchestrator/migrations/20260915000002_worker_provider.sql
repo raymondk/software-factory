@@ -1,0 +1,1 @@
+ALTER TABLE workers ADD COLUMN provider TEXT NOT NULL DEFAULT '';
