@@ -6,7 +6,7 @@ import { Board } from "./Board.jsx";
 import { Detail } from "./Detail.jsx";
 import { Workers } from "./Workers.jsx";
 import { Metrics } from "./Metrics.jsx";
-import { Config } from "./Config.jsx";
+import { ConfigDialog } from "./Config.jsx";
 import { LogPane } from "./Log.jsx";
 import { Header } from "./Header.jsx";
 import { AgentModel } from "./AgentModel.jsx";
@@ -24,7 +24,6 @@ export function App() {
   const [workers, setWorkers] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [agents, setAgents] = useState({}); // what the providers advertise: agent -> models
-  const [config, setConfig] = useState(null); // fetched once: it does not change while running
   const [selected, setSelected] = useState(idFromHash);
   const [run, setRun] = useState(runFromHash);
   const [workerLog, setWorkerLog] = useState(workerFromHash);
@@ -61,7 +60,6 @@ export function App() {
   }, [showError]);
 
   useEffect(() => { if (selected == null) setTicket(null); refresh(); }, [selected, refresh]);
-  useEffect(() => { api("/config").then(setConfig, e => showError(e.message)); }, [showError]);
 
   // Polls while the tab is visible and refreshes as soon as it becomes visible again.
   useEffect(() => {
@@ -102,7 +100,7 @@ export function App() {
   const usage = ticket && (metrics?.per_ticket.find(x => x.ticket_id === ticket.id) ?? { tokens_in: 0, tokens_out: 0, cost: 0 });
   return (
     <Ctx.Provider value={{ refresh, select, showError }}>
-      <h1>Software Factory</h1>
+      <div id="top"><h1>Software Factory</h1><ConfigDialog /></div>
       <div id="error">{error && <><span>{error.message}</span><button onClick={() => setError(null)}>×</button></>}</div>
       <section>
         <CreateDialog agents={agents} />
@@ -119,7 +117,6 @@ export function App() {
       </dialog>
       <Metrics metrics={metrics} />
       <Workers workers={workers} />
-      <Config config={config} />
     </Ctx.Provider>
   );
 }

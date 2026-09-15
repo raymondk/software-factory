@@ -191,14 +191,24 @@ test("reorders with Alt+ArrowDown and by dragging", async ({ page, server }) => 
   await expect.poll(() => ids(server, a.id, b.id)).toEqual([a.id, b.id]);
 });
 
-test("shows the configuration read-only, without the token", async ({ page }) => {
+test("opens the configuration read-only from the cog, without the token", async ({ page }) => {
   await page.goto("/");
-  const section = page.locator("#config-section");
-  await expect(section.locator(".panel h3")).toHaveText(["Project", "Orchestrator", "Scheduler", "Providers", "Agents", "Prompts"]);
-  await expect(section).toContainText("my-project");
-  await expect(section).toContainText("{{ticket.id}}");
-  await expect(section).not.toContainText(TOKEN);
-  await expect(section.locator("input, textarea, select, button")).toHaveCount(0);
+  const dialog = page.locator("#config");
+  await expect(dialog).toBeHidden();
+  await page.click("#settings");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".panel h3")).toHaveText(["Project", "Orchestrator", "Scheduler", "Providers", "Agents", "Prompts"]);
+  await expect(dialog).toContainText("{{ticket.id}}");
+  await expect(dialog).not.toContainText(TOKEN);
+  await expect(dialog.locator("input, textarea, select, form")).toHaveCount(0);
+  const repo = dialog.locator("a", { hasText: "repo-a" });
+  await expect(repo).toHaveAttribute("href", "https://github.com/org/repo-a.git");
+  await expect(repo).toHaveAttribute("target", "_blank");
+  const provider = dialog.locator(".panel", { has: page.locator("h3", { hasText: "Providers" }) }).locator("a");
+  await expect(provider).toHaveAttribute("href", /^http:\/\/127\.0\.0\.1:\d+\/status$/);
+  await expect(provider).toHaveAttribute("target", "_blank");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 });
 
 test("shows a worker in the Workers panel", async ({ page, server }) => {

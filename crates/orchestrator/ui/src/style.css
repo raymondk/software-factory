@@ -9,7 +9,11 @@
 :root[data-theme="dark"] { --icp-bg: #14110d; --icp-bg-elev: #1c1813; --icp-bg-sunk: #1c1813; --icp-rule: #2d2820; --icp-fg: #f0ebe0; --icp-fg-secondary: #c9c2b4; --icp-fg-muted: #868078; --icp-accent: #c25a37; --icp-accent-strong: #d96a45; --icp-accent-dim: rgba(194, 90, 55, 0.15); }
 
 body { font: 14px/1.45 var(--sans); margin: 1.5rem; background: var(--icp-bg); color: var(--icp-fg); }
-h1 { margin: 0 0 1rem; font: 500 26px var(--serif); letter-spacing: -0.015em; }
+#top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+h1 { margin: 0; font: 500 26px var(--serif); letter-spacing: -0.015em; }
+/* The cog opening the configuration modal. */
+#settings { width: 2.25rem; height: 2.25rem; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; color: var(--icp-fg-secondary); }
+#settings:hover { color: var(--icp-fg); }
 h2 { font: 500 20px var(--serif); letter-spacing: -0.015em; margin: 0 0 .5rem; }
 h3 { font: 500 16px var(--serif); margin: 1rem 0 .5rem; }
 a { color: var(--icp-accent); }
@@ -94,14 +98,14 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .log-head span { margin-right: auto; }
 .log-head + .log { margin-top: .35rem; }
 .log { font: 12px/1.45 var(--mono); background: var(--icp-bg-sunk); color: var(--icp-fg); padding: .6rem .75rem; margin: .5rem 0 0; max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-#metrics-section, #workers-section, #config-section { margin-top: 2.5rem; }
+#metrics-section, #workers-section { margin-top: 2.5rem; }
 /* Metrics and workers tables each sit in their own bordered pane; the per-agent and per-model panes are spaced apart. */
 .panels { display: grid; gap: 1.25rem; }
 .panel { background: var(--icp-bg-elev); border: 1px solid var(--icp-rule); padding: 1rem 1.25rem; }
 .panel h3 { margin: 0 0 .75rem; }
 .panel tbody tr:last-child td { border-bottom: 0; }
 #totals { margin: 0 0 1rem; }
-/* Configuration: small panes side by side, each a list of key/value rows; prompts as preformatted blocks. */
+/* Configuration modal: small panes side by side, each a list of key/value rows; prompts as preformatted blocks. */
 .config { grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr)); }
 .config dl { margin: 0; display: grid; gap: .35rem; }
 .config dl > div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: .75rem; }
@@ -109,6 +113,8 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .config dt { font: 500 11px var(--sans); letter-spacing: 0.18em; text-transform: uppercase; color: var(--icp-fg-secondary); padding-top: .15em; }
 .config dd { margin: 0; font: 13px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .config dd pre { margin: 0; background: var(--icp-bg-sunk); padding: .4rem .6rem; }
+.config a { display: block; }
+.config a::after { content: " ↗"; }
 #workers-section > button { margin-top: .75rem; }
 #workers tr[data-ticket] { cursor: pointer; }
 #workers tr[data-ticket]:hover { background: var(--icp-bg-sunk); }
