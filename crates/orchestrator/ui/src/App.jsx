@@ -127,7 +127,8 @@ function CreateDialog() {
   const submit = busy(async e => {
     e.preventDefault();
     const form = e.currentTarget, f = new FormData(form);
-    await api("/tickets", { method: "POST", body: JSON.stringify(Object.fromEntries(f)) });
+    // Empty agent and model mean "any" and "the provider's default": left out rather than sent as "".
+    await api("/tickets", { method: "POST", body: JSON.stringify(Object.fromEntries([...f].filter(([, v]) => v !== ""))) });
     form.reset();
     dialog.current.close();
     await refresh();
@@ -141,6 +142,7 @@ function CreateDialog() {
           {error && <div class="error">{error}</div>}
           <input name="title" placeholder="Title" required />
           <select name="state">{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+          <div class="pair"><input name="agent" placeholder="Agent (any)" /><input name="model" placeholder="Model (default)" /></div>
           <textarea name="description" placeholder="Description" rows={16} />
           <div class="row"><button class="primary">Create ticket</button></div>
         </form>

@@ -67,7 +67,11 @@ impl Fixture {
     }
 
     async fn ticket(&self, title: &str) -> i64 {
-        let t = self.human.create_ticket(&CreateTicket { title: title.into(), description: String::new(), state: None }).await.unwrap();
+        self.ticket_with_model(title, None).await
+    }
+
+    async fn ticket_with_model(&self, title: &str, model: Option<&str>) -> i64 {
+        let t = self.human.create_ticket(&CreateTicket { title: title.into(), model: model.map(str::to_owned), ..Default::default() }).await.unwrap();
         self.human.update_ticket(t.id, &UpdateTicket { state: Some("ready".into()), ..Default::default() }).await.unwrap();
         t.id
     }
@@ -84,6 +88,7 @@ impl Fixture {
             .env("FACTORY_WORKER_ID", &w.id)
             .env("FACTORY_WORKER_TOKEN", &w.token)
             .env("FACTORY_AGENT", "command")
+            .env("FACTORY_MODEL", "m-default")
             .env("FACTORY_WORKSPACE", &workspace)
             .env("FACTORY_AGENT_COMMAND", &agent)
             .env("FACTORY_POLL_INTERVAL", "100ms")
@@ -145,6 +150,7 @@ async fn success_moves_on_and_reports_usage() {
 printf '%s' "$PROMPT" > prompt.txt
 printf '%s' "$GIT_CONFIG_VALUE_0" > git.txt
 printf '%s' "$FACTORY_REPOS" > repos.txt
+printf '%s' "$MODEL" > model.txt
 patch '{"state":"in_review"}'
 echo working
 echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
@@ -157,6 +163,9 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
     // One run, ended by the usage report; the worker's and the agent's lines are shipped, run lines tagged with it.
     let t = f.wait_for(id, |t| t.runs.first().is_some_and(|r| r.ended_at.is_some())).await;
     assert_eq!((t.runs.len(), t.runs[0].worker_id.as_str(), t.runs[0].ticket_id), (1, wid.as_str(), id));
+    // No model on the ticket: the provider's default from FACTORY_MODEL reaches the agent and is recorded on the run.
+    assert_eq!(t.runs[0].model.as_deref(), Some("m-default"));
+    assert_eq!(std::fs::read_to_string(ws.join("model.txt")).unwrap(), "m-default");
     let run = t.runs[0].id;
     let deadline = Instant::now() + Duration::from_secs(10);
     let lines = loop {
@@ -168,7 +177,7 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     assert!(lines[0].line.starts_with(&format!("worker {wid} (agent command) starting")) && lines[0].run_id.is_none(), "{lines:?}");
-    assert!(lines.iter().any(|l| l.line.contains(&format!("ticket #{id} (ready), run {run}")) && l.run_id == Some(run)));
+    assert!(lines.iter().any(|l| l.line.contains(&format!("ticket #{id} (ready), run {run}, model m-default")) && l.run_id == Some(run)));
     let of_run = f.human.run_logs(run, None).await.unwrap();
     assert!(of_run.iter().all(|l| l.run_id == Some(run)) && of_run.iter().any(|l| l.line == "working"));
     assert!(f.human.run_logs(run, Some(of_run.last().unwrap().id)).await.unwrap().is_empty());
@@ -184,6 +193,7 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
         if let Some(b) = m.per_ticket.iter().find(|b| b.key.ticket_id == id) {
             assert_eq!((b.totals.tokens_in, b.totals.tokens_out, b.totals.cost), (100, 20, 0.25));
             assert_eq!(m.per_worker[0].key.worker_id, wid);
+            assert_eq!(m.per_model[0].key.model.as_deref(), Some("m-default"));
             break;
         }
         assert!(Instant::now() < deadline, "usage never reported");
@@ -195,8 +205,11 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
         assert!(Instant::now() < deadline);
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let second = f.ticket("again").await;
-    f.wait_for(second, |t| t.state == "in_review" && t.runs.first().is_some_and(|r| r.ended_at.is_some())).await;
+    // A ticket with a model: that one wins over the default.
+    let second = f.ticket_with_model("again", Some("m-2")).await;
+    let t = f.wait_for(second, |t| t.state == "in_review" && t.runs.first().is_some_and(|r| r.ended_at.is_some())).await;
+    assert_eq!(t.runs[0].model.as_deref(), Some("m-2"));
+    assert_eq!(std::fs::read_to_string(ws.join("model.txt")).unwrap(), "m-2");
     stop(child).await;
     // The last line is flushed before exit; it belongs to no run.
     let last = f.human.worker_logs(&wid, None).await.unwrap().pop().unwrap();

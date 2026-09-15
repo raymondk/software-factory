@@ -1,5 +1,7 @@
 //! Spec 4.3: starts a worker per available (unassigned, unblocked) ticket and stops idle ones when the queue is empty.
 
+use std::collections::BTreeMap;
+
 use sqlx::SqlitePool;
 
 use crate::api;
@@ -13,19 +15,27 @@ pub async fn tick(pool: &SqlitePool, config: &Config, provider: &Provider) -> an
     let alive = workers.iter().filter(|(_, _, s)| s != "dead").count() as u32;
     let slots = config.scheduler.max_workers.saturating_sub(alive).min(status.capacity.saturating_sub(status.in_use));
     let states = serde_json::to_string(&config.prompts.keys().collect::<Vec<_>>()).unwrap();
-    let (available,): (i64,) = sqlx::query_as(&format!(
-        "SELECT COUNT(*) FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?1)) AND NOT {}",
+    // Available tickets per agent; those with none form a pool any worker drains.
+    let counts: Vec<(Option<String>, i64)> = sqlx::query_as(&format!(
+        "SELECT agent, COUNT(*) FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?1)) AND NOT {} GROUP BY agent",
         api::BLOCKED
     ))
     .bind(states)
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await?;
-    let available = available as u32;
+    let mut pool_size = 0u32;
+    let mut pinned: BTreeMap<&str, u32> = BTreeMap::new();
+    for (agent, n) in &counts {
+        match agent {
+            Some(a) => *pinned.entry(a).or_default() += *n as u32,
+            None => pool_size += *n as u32,
+        }
+    }
 
-    // Stop idle workers when there is nothing to do. Marking dead first invalidates the token even if the stop fails;
-    // the dead-worker sweep below then retries the stop next tick.
-    if available == 0 {
-        for (id, agent, _) in workers.iter().filter(|(_, _, s)| s == "idle") {
+    // Stop idle workers of an agent with no work when the pool is empty. Marking dead first invalidates the token even
+    // if the stop fails; the dead-worker sweep below then retries the stop next tick.
+    if pool_size == 0 {
+        for (id, agent, _) in workers.iter().filter(|(_, a, s)| s == "idle" && !pinned.contains_key(a.as_str())) {
             let marked = sqlx::query("UPDATE workers SET status = 'dead' WHERE id = ?1 AND status = 'idle'").bind(id).execute(pool).await?;
             if marked.rows_affected() == 0 {
                 continue;
@@ -55,21 +65,35 @@ pub async fn tick(pool: &SqlitePool, config: &Config, provider: &Provider) -> an
         }
     }
 
-    // Prompts are shared, so any agent can take any ticket: new workers run the first configured agent.
-    let Some(agent) = config.agents.keys().next() else { return Ok(()) };
-    let pending = workers.iter().filter(|(_, _, s)| s == "starting" || s == "idle").count() as u32;
-    for _ in 0..available.saturating_sub(pending).min(slots) {
-        let w = api::new_worker(pool, config, agent).await.map_err(|e| anyhow::anyhow!("creating worker: {e:?}"))?;
-        let req = StartWorker {
-            worker_id: w.id.clone(),
-            agent: w.agent,
-            orchestrator_url: config.orchestrator.public_url.clone().unwrap(),
-            worker_token: w.token,
-        };
-        eprintln!("scheduler: starting {agent} worker {}", w.id);
-        if let Err(e) = provider.start(&req).await {
-            sqlx::query("UPDATE workers SET status = 'dead' WHERE id = ?1").bind(&w.id).execute(pool).await?;
-            anyhow::bail!("start {}: {e:#}", w.id);
+    // Each configured agent gets a worker per ticket pinned to it; starting and idle workers count. Spare ones drain
+    // the pool, which otherwise starts workers of the first configured agent. An agent not in config is never scheduled.
+    let mut spare = 0u32;
+    let mut starts: Vec<(&str, u32)> = vec![];
+    for agent in config.agents.keys() {
+        let pending = workers.iter().filter(|(_, a, s)| a == agent && (s == "starting" || s == "idle")).count() as u32;
+        let need = pinned.get(agent.as_str()).copied().unwrap_or(0);
+        spare += pending.saturating_sub(need);
+        starts.push((agent, need.saturating_sub(pending)));
+    }
+    if let Some((_, n)) = starts.first_mut() {
+        *n += pool_size.saturating_sub(spare);
+    }
+    let mut slots = slots;
+    for (agent, n) in starts {
+        for _ in 0..n.min(slots) {
+            let w = api::new_worker(pool, config, agent).await.map_err(|e| anyhow::anyhow!("creating worker: {e:?}"))?;
+            let req = StartWorker {
+                worker_id: w.id.clone(),
+                agent: w.agent,
+                orchestrator_url: config.orchestrator.public_url.clone().unwrap(),
+                worker_token: w.token,
+            };
+            eprintln!("scheduler: starting {agent} worker {}", w.id);
+            if let Err(e) = provider.start(&req).await {
+                sqlx::query("UPDATE workers SET status = 'dead' WHERE id = ?1").bind(&w.id).execute(pool).await?;
+                anyhow::bail!("start {}: {e:#}", w.id);
+            }
+            slots -= 1;
         }
     }
     Ok(())

@@ -10,7 +10,28 @@ async fn serve() -> (String, tempfile::TempDir) {
 }
 
 fn new(title: &str) -> CreateTicket {
-    CreateTicket { title: title.into(), description: format!("about {title}"), state: None }
+    CreateTicket { title: title.into(), description: format!("about {title}"), ..Default::default() }
+}
+
+#[tokio::test]
+async fn agent_and_model_are_optional_settable_and_clearable() {
+    let (url, _dir) = serve().await;
+    let client = Client::new(&url, TOKEN);
+    let t = client.create_ticket(&new("a")).await.unwrap();
+    assert_eq!((t.agent, t.model), (None, None));
+    let t = client.create_ticket(&CreateTicket { agent: Some("codex".into()), model: Some("o3".into()), ..new("b") }).await.unwrap();
+    assert_eq!((t.agent.as_deref(), t.model.as_deref()), (Some("codex"), Some("o3")));
+    let got = client.get_ticket(t.id).await.unwrap();
+    assert_eq!((got.agent.as_deref(), got.model.as_deref()), (Some("codex"), Some("o3")));
+    assert!(client.list_tickets(&Default::default()).await.unwrap().iter().any(|x| x.id == t.id && x.model.as_deref() == Some("o3")));
+
+    // Omitted: untouched. Set: replaced. Null: cleared.
+    let u = client.update_ticket(t.id, &UpdateTicket { title: Some("b2".into()), ..Default::default() }).await.unwrap();
+    assert_eq!((u.agent.as_deref(), u.model.as_deref()), (Some("codex"), Some("o3")));
+    let u = client.update_ticket(t.id, &UpdateTicket { agent: Some(Some("claude-code".into())), model: Some(None), ..Default::default() }).await.unwrap();
+    assert_eq!((u.agent.as_deref(), u.model), (Some("claude-code"), None));
+    let u = client.update_ticket(t.id, &UpdateTicket { agent: Some(None), model: Some(Some("opus".into())), ..Default::default() }).await.unwrap();
+    assert_eq!((u.agent, u.model.as_deref()), (None, Some("opus")));
 }
 
 #[tokio::test]

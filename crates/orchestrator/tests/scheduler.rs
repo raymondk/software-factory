@@ -80,12 +80,38 @@ async fn setup(capacity: u32) -> (SqlitePool, Config, Provider, Shared, tempfile
 }
 
 async fn ticket(pool: &SqlitePool, state: &str, assignee: Option<&str>) {
-    sqlx::query("INSERT INTO tickets (title, description, state, rank, assignee, created_at, updated_at) VALUES ('t', '', ?1, 1, ?2, 'now', 'now')")
+    pinned(pool, state, assignee, None).await
+}
+
+async fn pinned(pool: &SqlitePool, state: &str, assignee: Option<&str>, agent: Option<&str>) {
+    sqlx::query("INSERT INTO tickets (title, description, state, rank, assignee, created_at, updated_at, agent) VALUES ('t', '', ?1, 1, ?2, 'now', 'now', ?3)")
         .bind(state)
         .bind(assignee)
+        .bind(agent)
         .execute(pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn pinned_tickets_start_workers_of_their_agent_and_spare_workers_drain_the_pool() {
+    let (pool, config, provider, fake, _dir) = setup(10).await;
+    pinned(&pool, "ready", None, Some("codex")).await;
+    pinned(&pool, "ready", None, Some("codex")).await;
+    pinned(&pool, "ready", None, Some("nope")).await; // not in [agents]: never scheduled
+    ticket(&pool, "ready", None).await; // pool: covered by the idle claude-code worker
+    let idle = worker(&pool, &config, &fake, "claude-code", "idle", true).await;
+    scheduler::tick(&pool, &config, &provider).await.unwrap();
+    let starts = fake.lock().unwrap().starts.clone();
+    assert_eq!(starts.iter().map(|s| s.agent.as_str()).collect::<Vec<_>>(), ["codex", "codex"]);
+    assert_eq!(status_of(&pool, &idle).await, "idle");
+    assert!(fake.lock().unwrap().stops.is_empty());
+
+    // The pool is empty and claude-code has no pinned work: its idle worker stops; codex keeps its pending ones.
+    sqlx::query("UPDATE tickets SET assignee = 'someone' WHERE agent IS NULL").execute(&pool).await.unwrap();
+    scheduler::tick(&pool, &config, &provider).await.unwrap();
+    assert_eq!(fake.lock().unwrap().stops, vec![idle.clone()]);
+    assert_eq!(fake.lock().unwrap().starts.len(), 2);
 }
 
 /// A worker record in `status`, also running at the provider unless `status` is `dead` and `listed` is false.
