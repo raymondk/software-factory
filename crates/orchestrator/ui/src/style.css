@@ -95,6 +95,12 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .log-head + .log { margin-top: .35rem; }
 .log { font: 12px/1.45 var(--mono); background: var(--icp-bg-sunk); color: var(--icp-fg); padding: .6rem .75rem; margin: .5rem 0 0; max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 #metrics-section, #workers-section { margin-top: 2.5rem; }
+/* Metrics and workers tables each sit in their own bordered pane; the per-agent and per-model panes are spaced apart. */
+.panels { display: grid; gap: 1.25rem; }
+.panel { background: var(--icp-bg-elev); border: 1px solid var(--icp-rule); padding: 1rem 1.25rem; }
+.panel h3 { margin: 0 0 .75rem; }
+.panel tbody tr:last-child td { border-bottom: 0; }
+#totals { margin: 0 0 1rem; }
 #workers-section > button { margin-top: .75rem; }
 #workers tr[data-ticket] { cursor: pointer; }
 #workers tr[data-ticket]:hover { background: var(--icp-bg-sunk); }
