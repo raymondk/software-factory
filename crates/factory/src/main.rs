@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use api_client::{Breakdown, Client, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, LogLine, MoveTicket, ReportUsage, Totals, UpdateTicket};
+use api_client::{ApproveUser, Breakdown, Client, Comment, CreateComment, CreateRelation, CreateTicket, CreateToken, CreateWorker, ListTickets, LogLine, MoveTicket, ReportUsage, Totals, UpdateTicket};
 use serde::Serialize;
 use clap::{Parser, Subcommand};
 
@@ -31,6 +31,43 @@ enum Command {
     },
     /// Print usage totals and breakdowns per ticket, worker, agent, and model
     Metrics,
+    /// Developers: approve and revoke Internet Identity principals (admin token)
+    User {
+        #[command(subcommand)]
+        command: UserCommand,
+    },
+    /// Your personal tokens for the CLI (user token)
+    Token {
+        #[command(subcommand)]
+        command: TokenCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum UserCommand {
+    /// List users: everyone for the admin, approved ones otherwise
+    List,
+    /// Approve a principal under a name; also renames an approved one
+    Approve {
+        principal: String,
+        #[arg(long)]
+        name: String,
+    },
+    /// Revoke a user and every session and token they hold
+    Revoke { principal: String },
+}
+
+#[derive(Subcommand)]
+enum TokenCommand {
+    /// List your tokens
+    List,
+    /// Create a token; the token is printed once, for FACTORY_TOKEN
+    Create {
+        #[arg(long)]
+        name: String,
+    },
+    /// Revoke one of your tokens by id
+    Revoke { id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -274,6 +311,24 @@ async fn main() -> anyhow::Result<()> {
             m.per_agent.iter().for_each(|b| print_totals("agent", &b.key.agent, &b.totals));
             m.per_model.iter().for_each(|b| print_totals("model", b.key.model.as_deref().unwrap_or("-"), &b.totals));
         }
+        Command::User { command } => match command {
+            UserCommand::List => {
+                for u in client.list_users().await? {
+                    println!("{}\t{}\t{}\t{}", u.principal, u.status, u.name.as_deref().unwrap_or("-"), u.created_at);
+                }
+            }
+            UserCommand::Approve { principal, name } => print(&client.approve_user(&principal, &ApproveUser { name }).await?),
+            UserCommand::Revoke { principal } => print(&client.revoke_user(&principal).await?),
+        },
+        Command::Token { command } => match command {
+            TokenCommand::List => {
+                for t in client.list_tokens().await? {
+                    println!("{}\t{}\t{}", t.id, t.name, t.created_at);
+                }
+            }
+            TokenCommand::Create { name } => print(&client.create_token(&CreateToken { name }).await?),
+            TokenCommand::Revoke { id } => client.delete_token(id).await?,
+        },
     }
     Ok(())
 }

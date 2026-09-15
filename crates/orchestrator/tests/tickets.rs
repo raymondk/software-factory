@@ -347,7 +347,7 @@ async fn comments_add_list_resolve() {
     assert!(client.list_comments(t.id).await.unwrap().is_empty());
 
     let first = client.add_comment(t.id, &comment("first")).await.unwrap();
-    assert_eq!((first.ticket_id, first.author.as_str(), first.body.as_str(), first.resolved), (t.id, "human", "first", false));
+    assert_eq!((first.ticket_id, first.author.as_str(), first.body.as_str(), first.resolved), (t.id, "admin", "first", false));
     tick().await;
     let second = client.add_comment(t.id, &comment("second")).await.unwrap();
     client.add_comment(other.id, &comment("elsewhere")).await.unwrap();
