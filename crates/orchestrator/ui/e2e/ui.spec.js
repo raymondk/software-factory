@@ -207,6 +207,7 @@ test("opens the configuration read-only from the cog, without the token", async 
   const provider = dialog.locator(".panel", { has: page.locator("h3", { hasText: "Providers" }) }).locator("a");
   await expect(provider).toHaveAttribute("href", /^http:\/\/127\.0\.0\.1:\d+\/status$/);
   await expect(provider).toHaveAttribute("target", "_blank");
+  await expect(provider).not.toContainText("/status");
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 });

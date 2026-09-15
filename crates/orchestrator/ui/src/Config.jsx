@@ -6,7 +6,7 @@ import { Header } from "./Header.jsx";
 const Rows = ({ rows }) => (
   <dl>{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
 );
-const Link = ({ href }) => <a href={href} target="_blank" rel="noopener">{href}</a>;
+const Link = ({ href, text = href }) => <a href={href} target="_blank" rel="noopener">{text}</a>;
 const entries = (obj, f) => Object.entries(obj).map(([k, v]) => [k, f(v)]);
 
 const Panes = ({ config: c }) => (
@@ -14,7 +14,7 @@ const Panes = ({ config: c }) => (
     <div class="panel"><h3>Project</h3><Rows rows={[["name", c.project.name], ["repos", c.project.repos.map(r => <Link key={r} href={r} />)]]} /></div>
     <div class="panel"><h3>Orchestrator</h3><Rows rows={[["listen", c.orchestrator.listen], ["public_url", c.orchestrator.public_url], ["database", c.orchestrator.database], ["heartbeat_timeout", c.orchestrator.heartbeat_timeout]]} /></div>
     <div class="panel"><h3>Scheduler</h3><Rows rows={[["max_workers", c.scheduler.max_workers], ["interval", c.scheduler.interval]]} /></div>
-    <div class="panel"><h3>Providers</h3><Rows rows={entries(c.providers, p => <Link href={p.url.replace(/\/+$/, "") + "/status"} />)} /></div>
+    <div class="panel"><h3>Providers</h3><Rows rows={entries(c.providers, p => <Link href={p.url.replace(/\/+$/, "") + "/status"} text={p.url} />)} /></div>
     <div class="panel"><h3>Agents</h3><Rows rows={entries(c.agents, a => `run_timeout ${a.run_timeout}`)} /></div>
     <div class="panel wide"><h3>Prompts</h3><Rows rows={entries(c.prompts, p => <pre>{p}</pre>)} /></div>
   </div>
