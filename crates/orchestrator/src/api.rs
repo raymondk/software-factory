@@ -291,6 +291,15 @@ async fn comments_of(state: &AppState, ticket_id: i64) -> Result<Vec<Comment>, A
     Ok(rows.into_iter().map(Comment::from).collect())
 }
 
+/// Whatever changes what a ticket shows, including its comments and relations, bumps `updated_at`.
+async fn touch(db: impl SqliteExecutor<'_>, ids: &[i64]) -> Result<(), ApiError> {
+    sqlx::query(&format!("UPDATE tickets SET updated_at = {NOW} WHERE id IN (SELECT value FROM json_each(?1))"))
+        .bind(serde_json::to_string(ids).unwrap())
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 async fn ticket_exists(state: &AppState, id: i64) -> Result<(), ApiError> {
     let found: Option<(i64,)> = sqlx::query_as("SELECT id FROM tickets WHERE id = ?1").bind(id).fetch_optional(&state.pool).await?;
     found.map(|_| ()).ok_or(ApiError::NotFound)
@@ -319,6 +328,7 @@ async fn add_comment(
     .bind(&req.body)
     .fetch_one(&state.pool)
     .await?;
+    touch(&state.pool, &[id]).await?;
     Ok((StatusCode::CREATED, Json(row.into())))
 }
 
@@ -338,7 +348,9 @@ async fn set_resolved(state: &AppState, id: i64, cid: i64, resolved: bool) -> Re
             .bind(resolved)
             .fetch_optional(&state.pool)
             .await?;
-    row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
+    let row = row.ok_or(ApiError::NotFound)?;
+    touch(&state.pool, &[id]).await?;
+    Ok(Json(row.into()))
 }
 
 #[derive(sqlx::FromRow)]
@@ -412,6 +424,7 @@ async fn add_relation(
         }
     }
     sqlx::query("INSERT INTO ticket_relations (from_id, type, to_id) VALUES (?1, ?2, ?3)").bind(id).bind(&req.r#type).bind(req.ticket).execute(&mut *tx).await?;
+    touch(&mut *tx, &[id, req.ticket]).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(full_ticket(&state, id).await?)))
 }
@@ -433,6 +446,7 @@ async fn remove_relation(
     if deleted.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
+    touch(&state.pool, &[id, other]).await?;
     Ok(Json(full_ticket(&state, id).await?))
 }
 
