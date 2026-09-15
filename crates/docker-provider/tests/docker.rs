@@ -42,7 +42,9 @@ fn docker_ready() -> bool {
 fn config(image: &str, max_workers: u32) -> Config {
     Config::parse(&format!(
         "[provider]\nlisten = \"127.0.0.1:0\"\nmax_workers = {max_workers}\n\
-         [docker]\nimage = \"{image}\"\n[worker_env]\nGIT_TOKEN = \"git-secret\"\n"
+         [agents.claude-code]\nimage = \"{image}\"\nmodels = [\"sonnet\", \"opus\"]\ndefault_model = \"sonnet\"\n\
+         [agents.other]\nimage = \"no-such-image\"\nmodels = [\"m\"]\ndefault_model = \"m\"\n\
+         [worker_env]\nGIT_TOKEN = \"git-secret\"\n"
     ))
     .unwrap()
 }
@@ -81,11 +83,15 @@ impl Drop for Workers {
 }
 
 async fn start(url: &str, worker_id: &str) -> reqwest::Response {
+    start_agent(url, worker_id, "claude-code").await
+}
+
+async fn start_agent(url: &str, worker_id: &str, agent: &str) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{url}/workers"))
         .json(&json!({
             "worker_id": worker_id,
-            "agent": "claude-code",
+            "agent": agent,
             "orchestrator_url": "http://orchestrator:8080",
             "worker_token": "worker-secret",
         }))
@@ -117,7 +123,9 @@ async fn start_sets_env_and_stop_removes() {
     assert_eq!(res.status(), StatusCode::CREATED);
     let worker: Value = res.json().await.unwrap();
     assert_eq!(worker["worker_id"], *id);
+    assert_eq!(worker["agent"], "claude-code");
     let cid = worker["container_id"].as_str().unwrap();
+    assert_eq!(docker(&["inspect", "--format", "{{index .Config.Labels \"software-factory.agent\"}}", cid]).unwrap(), "claude-code");
 
     let env: Vec<String> = serde_json::from_str(&docker(&["inspect", "--format", "{{json .Config.Env}}", cid]).unwrap()).unwrap();
     for expected in [
@@ -126,6 +134,7 @@ async fn start_sets_env_and_stop_removes() {
         &format!("FACTORY_WORKER_ID={id}"),
         "FACTORY_WORKER_TOKEN=worker-secret",
         "FACTORY_AGENT=claude-code",
+        "FACTORY_MODEL=sonnet",
         "GIT_TOKEN=git-secret",
     ] {
         assert!(env.iter().any(|e| e == expected), "missing {expected} in {env:?}");
@@ -135,8 +144,12 @@ async fn start_sets_env_and_stop_removes() {
     let s = status(&url).await;
     assert_eq!(s["capacity"], 4);
     assert_eq!(s["in_use"], 1);
-    assert_eq!(s["image"], SLEEP_IMAGE);
-    assert_eq!(s["workers"], json!([{ "worker_id": id, "container_id": cid, "status": "running" }]));
+    assert_eq!(s["agents"], json!({ "claude-code": { "models": ["sonnet", "opus"], "default_model": "sonnet" }, "other": { "models": ["m"], "default_model": "m" } }));
+    assert_eq!(s["workers"], json!([{ "worker_id": id, "agent": "claude-code", "container_id": cid, "status": "running" }]));
+
+    let unknown = start_agent(&url, &format!("{id}-x"), "nope").await;
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+    assert!(unknown.json::<Value>().await.unwrap()["error"].as_str().unwrap().contains("unknown agent"));
 
     assert_eq!(stop(&url, id).await, StatusCode::NO_CONTENT);
     assert!(docker(&["inspect", cid]).is_none(), "container still exists");
@@ -188,7 +201,7 @@ async fn status_tracks_containers_that_exit_or_vanish() {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     };
-    assert_eq!(s["workers"], json!([{ "worker_id": a, "container_id": cid, "status": "exited" }]));
+    assert_eq!(s["workers"], json!([{ "worker_id": a, "agent": "claude-code", "container_id": cid, "status": "exited" }]));
     assert_eq!(s["in_use"], 0, "exited workers do not use capacity");
     assert_eq!(start(&url, b).await.status(), StatusCode::CREATED, "capacity is free again");
 
@@ -215,7 +228,7 @@ async fn recovers_workers_after_restart() {
     let url2 = serve_state(AppState::recover(config(SLEEP_IMAGE, 4)).await.unwrap()).await;
     let s = status(&url2).await;
     let listed = s["workers"].as_array().unwrap();
-    assert!(listed.contains(&json!({ "worker_id": id, "container_id": cid, "status": "running" })), "{listed:?}");
+    assert!(listed.contains(&json!({ "worker_id": id, "agent": "claude-code", "container_id": cid, "status": "running" })), "{listed:?}");
     // Other tests' containers may be mid-transition (created, removing); in_use counts everything not exited or dead.
     let busy = listed.iter().filter(|w| !matches!(w["status"].as_str(), Some("exited" | "dead"))).count();
     assert!(busy >= 1 && s["in_use"] == busy, "{s}");

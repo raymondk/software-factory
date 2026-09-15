@@ -7,11 +7,18 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+/// A container this provider started.
+#[derive(Debug, Clone)]
+pub struct Running {
+    pub container_id: String,
+    pub agent: String,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<config::Config>,
-    /// worker id -> container id
-    pub workers: Arc<Mutex<BTreeMap<String, String>>>,
+    /// worker id -> container
+    pub workers: Arc<Mutex<BTreeMap<String, Running>>>,
 }
 
 impl AppState {

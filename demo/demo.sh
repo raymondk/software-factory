@@ -45,8 +45,13 @@ factory ticket edit {{ticket.id}} --state in_review > /dev/null
 echo '{"tokens_in":100,"tokens_out":20,"cost":0.001}'
 '''
 TOML
-  sed '/^\[worker_env\]/,$d' demo/provider.toml > "$tmp/provider.toml"
+  sed '/^\[agents/,$d' demo/provider.toml > "$tmp/provider.toml"
   cat >> "$tmp/provider.toml" <<'TOML'
+[agents.command]
+image = "software-factory/worker:latest"
+models = ["sh"]
+default_model = "sh"
+
 [worker_env]
 FACTORY_AGENT_COMMAND = "/bin/sh"
 FACTORY_HEARTBEAT_INTERVAL = "2s"

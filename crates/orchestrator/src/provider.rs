@@ -1,5 +1,7 @@
 //! Client for the worker provider (spec 5).
 
+use std::collections::BTreeMap;
+
 use anyhow::Context;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -15,13 +17,24 @@ pub struct StartWorker {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderWorker {
     pub worker_id: String,
+    #[serde(default)]
+    pub agent: String,
     pub status: String,
+}
+
+/// An agent a provider advertises: the models it supports and the default among them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub models: Vec<String>,
+    pub default_model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Status {
     pub capacity: u32,
     pub in_use: u32,
+    #[serde(default)]
+    pub agents: BTreeMap<String, AgentInfo>,
     pub workers: Vec<ProviderWorker>,
 }
 
