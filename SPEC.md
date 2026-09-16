@@ -178,7 +178,9 @@ Auth: the page carries no token. A developer signs in with Internet Identity (4.
 
 A **run** is one hand-out of a ticket to a worker: opened by poll, ended by the worker's usage report or by the reaper. A ticket lists its runs. Runs carry the worker's agent and, once ended by a usage report, the model it ran with.
 
-A worker ships every line it prints and every line its agent prints to the orchestrator, tagged with the current run or with none (startup, polling, a crash before the first poll). Lines are raw text, truncated at 16 KiB, sent in batches every second or every 100 lines, whichever comes first, so a crash loses at most one batch. Interval, batch size and line limit are worker configuration (`FACTORY_LOG_INTERVAL`, `FACTORY_LOG_BATCH`, `FACTORY_LOG_MAX_LINE`). The orchestrator keeps everything; nothing is purged yet.
+A worker ships every line it prints and every line its agent prints to the orchestrator, tagged with the current run or with none (startup, polling, a crash before the first poll). Lines are raw text, truncated at 16 KiB, sent in batches every second or every 100 lines, whichever comes first, so a crash loses at most one batch. Interval, batch size and line limit are worker configuration (`FACTORY_LOG_INTERVAL`, `FACTORY_LOG_BATCH`, `FACTORY_LOG_MAX_LINE`).
+
+Retention: `orchestrator.log_retention` (default 7 days). Hourly, the orchestrator deletes a run's lines once the run ended that long ago, and run-less lines that old by their own timestamp. Run rows are kept, so a ticket still lists every run; only the text goes.
 
 ## 5. Worker Provider
 
@@ -245,6 +247,7 @@ repos = ["https://github.com/org/repo-a.git", "https://github.com/org/repo-b.git
 listen = "0.0.0.0:8080"
 token = "..."
 heartbeat_timeout = "60s"
+# log_retention = "7d"                   # worker log lines older than this are purged; runs are kept
 # public_url = "http://localhost:8080"   # how workers reach this orchestrator; defaults to the listen address
 
 [scheduler]
@@ -335,7 +338,6 @@ Out:
 - Additional workable states: `todo` for refinement, `in_review` for agent review, and states for merge, release, deploy.
 - External tracker sync (GitHub Issues, Jira).
 - Usage normalization across agents. Whether workers report tokens or dollars.
-- Log retention: purging old runs' lines.
 - Multiple providers and agents as specified in 2, 4.3, 5 and 7.
 - Per-user auth.
 - Kubernetes and cloud VM providers.

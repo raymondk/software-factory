@@ -35,6 +35,10 @@ pub struct Orchestrator {
     pub token: String,
     #[serde(with = "humantime_serde")]
     pub heartbeat_timeout: Duration,
+    /// Worker log lines older than this are purged: a run's lines once it ended that long ago, run-less lines by
+    /// age. Runs themselves are kept. Defaults to 7 days.
+    #[serde(default = "default_log_retention", with = "humantime_serde")]
+    pub log_retention: Duration,
     /// SQLite file. Defaults to `factory.db` next to the config file.
     pub database: Option<PathBuf>,
     /// How workers reach this orchestrator. Defaults to `http://<listen host or localhost>:<port>`.
@@ -51,6 +55,10 @@ pub struct Scheduler {
 
 fn default_interval() -> Duration {
     Duration::from_secs(10)
+}
+
+fn default_log_retention() -> Duration {
+    Duration::from_secs(7 * 24 * 3600)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,6 +114,12 @@ impl Config {
 mod tests {
     use super::*;
 
+    impl Config {
+        fn log_retention_days(&self) -> u64 {
+            self.orchestrator.log_retention.as_secs() / 86400
+        }
+    }
+
     const EXAMPLE: &str = include_str!("../../../factory.example.toml");
 
     #[test]
@@ -116,6 +130,8 @@ mod tests {
         assert!(c.prompts.contains_key("ready"));
         assert_eq!(c.orchestrator.public_url.as_deref(), Some("http://localhost:8080"));
         assert_eq!(c.scheduler.interval, Duration::from_secs(10));
+        assert_eq!(c.log_retention_days(), 7);
+        assert_eq!(Config::parse(&EXAMPLE.replace("heartbeat_timeout = \"60s\"", "heartbeat_timeout = \"60s\"\nlog_retention = \"2days\"")).unwrap().log_retention_days(), 2);
         assert_eq!(c.providers["local"].url, "http://localhost:8081");
         assert_eq!(c.providers["local"].token, "change-me");
         let c = Config::parse(&EXAMPLE.replace("listen = \"0.0.0.0:8080\"", "listen = \"10.0.0.5:9000\"\npublic_url = \"http://factory:9000\"")).unwrap();

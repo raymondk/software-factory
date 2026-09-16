@@ -19,6 +19,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Arc::new(config);
     let providers = Arc::new(Providers::new(&config));
     tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));
+    tokio::spawn(reaper::run_purge(pool.clone(), config.orchestrator.log_retention));
     tokio::spawn(scheduler::run(pool.clone(), config.clone(), providers.clone()));
     axum::serve(listener, api::router(AppState { pool, config, providers })).await?;
     Ok(())
