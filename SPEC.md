@@ -133,6 +133,11 @@ Workers:
 - `GET /config`: the running configuration, read-only, without the token. Shown in the UI.
 - `GET /agents`: the agents some provider advertised in its last status, each with the union of the models advertised for it. What the UI offers when setting agent and model on a ticket.
 
+Login (no token): developers sign in with Internet Identity. The browser obtains a delegation chain from `https://id.ai/authorize`; the orchestrator verifies the IC-Auth envelope off-chain against the IC mainnet root key (`ic_auth_verifier`) and mints its own session token. The principal derives from the origin the UI is served from (`orchestrator.public_url`): changing that origin changes every user's principal.
+- `GET /auth/challenge` → `{ challenge }`: a one-time nonce, five minutes, kept in memory.
+- `POST /auth/login` body `{ envelope }`: the envelope `signMessage(identity, challenge)` produced, base64url. Verifies it, consumes the challenge, rejects the anonymous principal, creates the user as `pending` if unknown, and returns `{ token, principal, status }`; the session lasts 8 hours.
+- `POST /auth/logout` (under auth): ends the calling session.
+
 Users:
 - `GET /me`: the calling developer with their `status`.
 - `GET /users`: every user for the admin, approved ones for everyone else.

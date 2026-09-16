@@ -44,8 +44,15 @@ pub fn router(state: AppState) -> Router {
         .route("/users/{principal}/revoke", post(users::revoke))
         .route("/tokens", get(users::list_tokens).post(users::create_token))
         .route("/tokens/{id}", delete(users::delete_token))
+        .route("/auth/logout", post(crate::auth::logout))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
-    Router::new().route("/", get(ui)).route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT })).merge(api).with_state(state)
+    Router::new()
+        .route("/", get(ui))
+        .route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT }))
+        .route("/auth/challenge", get(crate::auth::challenge))
+        .route("/auth/login", post(crate::auth::login))
+        .merge(api)
+        .with_state(state)
 }
 
 /// Who is making the request, as established by `auth`. Handlers read it via `Extension<Caller>`.
@@ -99,6 +106,7 @@ async fn auth(State(state): State<AppState>, mut req: Request, next: Next) -> Re
         return ApiError::Forbidden.into_response();
     }
     req.extensions_mut().insert(caller);
+    req.extensions_mut().insert(crate::auth::BearerToken(token));
     next.run(req).await
 }
 
