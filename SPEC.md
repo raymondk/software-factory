@@ -106,7 +106,7 @@ Ticket JSON lists each relation with the other ticket's id, title and state, as 
 
 ### 4.2 REST API
 
-All endpoints require a bearer token. MVP: one shared token for humans and the CLI, one token per worker issued at start.
+All endpoints require a bearer token: the admin's `orchestrator.token`, a developer's session or personal token, or a worker's token issued at start. Developers are Internet Identity principals; one who signs in is `pending` until the admin approves them under a name (`factory user approve`), and may only call `GET /me` until then. Only token hashes are stored.
 
 Tickets:
 - `GET /tickets` with optional `state` and `assignee` filters, ordered by rank
@@ -131,6 +131,12 @@ Workers:
 - `GET /workers`: list workers with their agent, provider and status.
 - `GET /config`: the running configuration, read-only, without the token. Shown in the UI.
 - `GET /agents`: the agents some provider advertised in its last status, each with the union of the models advertised for it. What the UI offers when setting agent and model on a ticket.
+
+Users:
+- `GET /me`: the calling developer with their `status`.
+- `GET /users`: every user for the admin, approved ones for everyone else.
+- `POST /users/{principal}/approve` body `{ name }`, `POST /users/{principal}/revoke`: admin only. Revoking deletes the user's sessions and personal tokens.
+- `GET /tokens`, `POST /tokens` body `{ name }`, `DELETE /tokens/{id}`: a developer's personal tokens for the CLI. The token is returned once, at creation.
 
 Metrics:
 - `GET /metrics`: totals and breakdowns per ticket, per worker, per agent and per model. Tokens in, tokens out, cost, tickets completed, tickets failed.
