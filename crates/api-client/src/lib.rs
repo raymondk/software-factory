@@ -334,6 +334,9 @@ pub enum Error {
     Http(#[from] reqwest::Error),
     #[error("{status}: {body}")]
     Api { status: u16, body: String },
+    /// A 2xx whose body is not what this client expects: the two sides are out of step.
+    #[error("cannot decode the response to {path}: {cause} (body: {body})")]
+    Decode { path: String, cause: String, body: String },
 }
 
 pub struct Client {
@@ -434,7 +437,7 @@ impl Client {
         if resp.status() == reqwest::StatusCode::NO_CONTENT {
             return Ok(None);
         }
-        Ok(Some(resp.json().await?))
+        Ok(Some(Self::decode(resp).await?))
     }
 
     pub async fn report_usage(&self, id: &str, req: &ReportUsage) -> Result<Usage, Error> {
@@ -507,7 +510,14 @@ impl Client {
     }
 
     async fn send<T: for<'de> Deserialize<'de>>(r: reqwest::RequestBuilder) -> Result<T, Error> {
-        Ok(Self::check(r).await?.json().await?)
+        Self::decode(Self::check(r).await?).await
+    }
+
+    /// Reads the body as JSON; a body that does not fit `T` is `Error::Decode`, with the serde cause and an excerpt.
+    async fn decode<T: for<'de> Deserialize<'de>>(resp: reqwest::Response) -> Result<T, Error> {
+        let path = resp.url().path().to_string();
+        let body = resp.text().await?;
+        serde_json::from_str(&body).map_err(|e| Error::Decode { path, cause: e.to_string(), body: body.chars().take(200).collect() })
     }
 
     async fn check(r: reqwest::RequestBuilder) -> Result<reqwest::Response, Error> {

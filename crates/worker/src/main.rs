@@ -14,6 +14,8 @@ use log::{Log, Shipping};
 enum Failure {
     /// The orchestrator rejected the token: the worker was reaped. Exit.
     Unauthorized,
+    /// A 2xx this worker cannot read: its image and the orchestrator are out of step. Exit; retrying cannot help.
+    Incompatible(Error),
     Api(Error),
 }
 
@@ -112,9 +114,11 @@ async fn shutdown() {
 impl Worker {
     async fn serve<A: Adapter>(self: &Arc<Self>, adapter: &A, heartbeat_interval: Duration) -> anyhow::Result<()> {
         let reaped = || anyhow::anyhow!("token rejected: reaped by the orchestrator");
+        let incompatible = |e: Error| anyhow::anyhow!("{e}; the worker image and the orchestrator are out of step, exiting");
         match self.call("register", || self.client.register(&self.id)).await {
             Ok(_) => {}
             Err(Failure::Unauthorized) => return Err(reaped()),
+            Err(Failure::Incompatible(e)) => return Err(incompatible(e)),
             Err(Failure::Api(e)) => return Err(e).context("registering"),
         }
         let (dead_tx, mut dead_rx) = tokio::sync::oneshot::channel();
@@ -136,6 +140,7 @@ impl Worker {
                 r = self.step(adapter, exclude.take()) => match r {
                     Ok(next) => exclude = next,
                     Err(Failure::Unauthorized) => return Err(reaped()),
+                    Err(Failure::Incompatible(e)) => return Err(incompatible(e)),
                     Err(Failure::Api(e)) => {
                         self.log.line(format!("worker {}: {e}", self.id));
                         tokio::time::sleep(self.poll_interval).await;
@@ -159,7 +164,7 @@ impl Worker {
         }
     }
 
-    /// Calls the orchestrator, retrying connection errors and 5xx with backoff.
+    /// Calls the orchestrator, retrying connection errors and 5xx with backoff. A body it cannot decode is fatal.
     async fn call<T>(&self, what: &str, f: impl AsyncFn() -> Result<T, Error>) -> Result<T, Failure> {
         let mut delay = Duration::from_secs(1);
         loop {
@@ -167,6 +172,7 @@ impl Worker {
                 Ok(v) => return Ok(v),
                 Err(Error::Api { status: 401, .. }) => return Err(Failure::Unauthorized),
                 Err(Error::Api { status, body }) if status < 500 => return Err(Failure::Api(Error::Api { status, body })),
+                Err(e @ Error::Decode { .. }) => return Err(Failure::Incompatible(e)),
                 Err(e) => {
                     self.log.line(format!("worker {}: {what}: {e}; retrying in {}", self.id, humantime::format_duration(delay)));
                     tokio::time::sleep(delay).await;
