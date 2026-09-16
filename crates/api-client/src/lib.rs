@@ -309,6 +309,26 @@ pub struct User {
     pub created_at: String,
 }
 
+/// `GET /auth/challenge`: a one-time nonce for the browser to sign with its Internet Identity delegation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Challenge {
+    pub challenge: String,
+}
+
+/// `POST /auth/login`: the IC-Auth `SignedEnvelope` over the challenge, base64url as `@ldclabs/ic-auth` encodes it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Login {
+    pub envelope: String,
+}
+
+/// A fresh session: the bearer token for the UI, valid 8 hours, and the user it belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub token: String,
+    pub principal: String,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApproveUser {
     pub name: String,
@@ -477,6 +497,12 @@ impl Client {
     pub async fn agents(&self) -> Result<std::collections::BTreeMap<String, Vec<String>>, Error> {
         let r = self.http.get(format!("{}/agents", self.base)).bearer_auth(&self.token);
         Self::send(r).await
+    }
+
+    /// Ends the session this client authenticates with.
+    pub async fn logout(&self) -> Result<(), Error> {
+        let r = self.http.post(format!("{}/auth/logout", self.base)).bearer_auth(&self.token);
+        Self::check(r).await.map(|_| ())
     }
 
     /// The calling developer; 404 for the admin and workers.

@@ -15,6 +15,12 @@ toml = "0.8"
 humantime-serde = "1"
 sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+ic_auth_verifier = { version = "0.10", features = ["envelope"] }
+ic_auth_types = "0.10"
+rand = "0.8"
+hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# `identity` adds the signing side, to build login fixtures.
+ic_auth_verifier = { version = "0.10", features = ["identity"] }
