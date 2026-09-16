@@ -9,6 +9,8 @@
     "e2e": "cargo build -p orchestrator -p factory && playwright test"
   },
   "dependencies": {
+    "@icp-sdk/auth": "^9.0.0",
+    "@ldclabs/ic-auth": "^0.5.1",
     "preact": "^10.29.8"
   },
   "devDependencies": {

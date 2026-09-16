@@ -168,9 +168,7 @@ There is no retry cap. A ticket that keeps killing workers is caught by humans w
 
 Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments, relations and runs, allows creating, editing, relating, reordering tickets, setting agent and model, and changing state, shows workers with their agent and provider, and metrics. A cog at the top right opens the running configuration read-only in a modal. A run's log opens from the ticket at `#/tickets/{id}/runs/{run}` and a worker's at `#/workers/{id}`, both following live while open. When the UI knows the agent behind a run or a worker (Claude Code today), its log opens in a pretty view that renders every event as structure, with a toggle to the raw lines; lines that are not events, such as the worker's own output, stay raw in place. The mapping from agent to renderer lives in the UI.
 
-Auth: the orchestrator injects the shared token into the page when serving it, and the UI sends it as a bearer header. Anyone who can load the page has the token, so the network decides who can use the UI.
-
-**TODO**: replace token injection with real login once per-user identity exists.
+Auth: the page carries no token. A developer signs in with Internet Identity (4.2, Login); the UI keeps the session token in `localStorage` and sends it as a bearer header, and a 401 sends it back to the sign-in screen. A pending or revoked user sees a page with their principal and the `factory user approve` command, polling until approved. The header shows the user, a Tokens modal (personal tokens for the CLI, each shown once at creation, revocable) and logout.
 
 ### 4.6 CLI
 

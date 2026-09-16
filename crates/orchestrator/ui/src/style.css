@@ -14,6 +14,16 @@ h1 { margin: 0; font: 500 26px var(--serif); letter-spacing: -0.015em; }
 /* The cog opening the configuration modal. */
 #settings { width: 2.25rem; height: 2.25rem; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; color: var(--icp-fg-secondary); }
 #settings:hover { color: var(--icp-fg); }
+#user { display: flex; gap: .75rem; align-items: center; color: var(--icp-fg-secondary); }
+/* Sign-in and waiting pages: one narrow column, serif heading, the accent button. */
+.login { max-width: 32rem; margin: 15vh auto 0; display: grid; gap: 1rem; justify-items: start; }
+.login h1 { font-size: 34px; }
+.login p { margin: 0; color: var(--icp-fg-secondary); font: 16px/1.5 var(--serif); }
+.login pre, .token-once pre { margin: 0; padding: .6rem .8rem; background: var(--icp-bg-sunk); font: 13px var(--mono); overflow-wrap: anywhere; }
+.login code { font: 13px var(--mono); }
+.token-once { margin-bottom: 1rem; display: grid; gap: .5rem; border-left-color: var(--icp-indicator-teal); }
+#tokens form.row { justify-content: flex-start; margin-bottom: 1rem; }
+#tokens td.row { justify-content: flex-end; }
 h2 { font: 500 20px var(--serif); letter-spacing: -0.015em; margin: 0 0 .5rem; }
 h3 { font: 500 16px var(--serif); margin: 1rem 0 .5rem; }
 a { color: var(--icp-accent); }

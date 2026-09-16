@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
-import { api } from "./api.js";
+import { api, getToken, setToken } from "./api.js";
 import { Ctx, useApp, useBusy } from "./context.js";
 import { STATES, userName } from "./format.js";
 import { Board } from "./Board.jsx";
@@ -8,7 +8,8 @@ import { Workers } from "./Workers.jsx";
 import { Metrics } from "./Metrics.jsx";
 import { ConfigDialog } from "./Config.jsx";
 import { LogPane } from "./Log.jsx";
-import { Header } from "./Header.jsx";
+import { Header, UserBar } from "./Header.jsx";
+import { Login, Pending } from "./Login.jsx";
 import { AgentModel } from "./AgentModel.jsx";
 
 // What is open lives in the URL hash, so reload, back and forward all go through history:
@@ -19,7 +20,33 @@ const workerFromHash = () => { const m = /^#\/workers\/([\w-]+)$/.exec(location.
 const select = id => { location.hash = id == null ? "" : "#/tickets/" + id; };
 const clearHash = () => history.replaceState(null, "", location.pathname);
 
+// Who is signed in decides what shows: the sign-in screen, the waiting page, or the factory. `me` is undefined while
+// loading, null when signed out, the user from GET /me, or a stand-in for the admin token (GET /me is 404 for it).
 export function App() {
+  const [me, setMe] = useState(getToken() ? undefined : null);
+  const load = useCallback(async () => {
+    if (!getToken()) return setMe(null);
+    try { setMe(await api("/me")); }
+    catch (e) { setMe(e.message === "not found" ? { name: "admin", status: "approved", admin: true } : null); }
+  }, []);
+  useEffect(() => {
+    load();
+    const out = () => setMe(null);
+    addEventListener("factory:unauthorized", out);
+    return () => removeEventListener("factory:unauthorized", out);
+  }, [load]);
+  const signOut = async () => {
+    await api("/auth/logout", { method: "POST" }).catch(() => {});
+    setToken(null);
+    setMe(null);
+  };
+  if (me === undefined) return <main class="login"><span class="empty">Loading…</span></main>;
+  if (me === null) return <Login onSignedIn={load} />;
+  if (me.status !== "approved") return <Pending me={me} onChange={load} onSignedOut={signOut} />;
+  return <Factory me={me} onSignedOut={signOut} />;
+}
+
+function Factory({ me, onSignedOut }) {
   const [tickets, setTickets] = useState(null); // null until the first load settles
   const [workers, setWorkers] = useState([]);
   const [metrics, setMetrics] = useState(null);
@@ -105,7 +132,7 @@ export function App() {
   const owners = [...new Set([...users.map(u => u.principal), ...(tickets ?? []).map(t => t.owner).filter(Boolean)])];
   return (
     <Ctx.Provider value={{ refresh, select, showError, users }}>
-      <div id="top"><h1>Software Factory</h1><ConfigDialog /></div>
+      <div id="top"><h1>Software Factory</h1><div class="row"><UserBar me={me} onSignedOut={onSignedOut} /><ConfigDialog /></div></div>
       <div id="error">{error && <><span>{error.message}</span><button onClick={() => setError(null)}>×</button></>}</div>
       <section>
         <CreateDialog agents={agents}>

@@ -122,9 +122,9 @@ async fn resolve(state: &AppState, token: &str) -> sqlx::Result<Option<Caller>> 
     Ok(worker.map(|(id,)| Caller::Worker(id)))
 }
 
-async fn ui(State(state): State<AppState>) -> Html<String> {
-    let token = state.config.orchestrator.token.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
-    Html(UI.replace("__TOKEN__", &token))
+/// The page carries no token: the browser signs in and keeps its session token itself.
+async fn ui() -> Html<&'static str> {
+    Html(UI)
 }
 
 #[derive(sqlx::FromRow)]
