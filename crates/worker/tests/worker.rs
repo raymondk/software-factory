@@ -323,3 +323,39 @@ async fn exits_when_token_stops_authenticating() {
     }
     assert!(!wait(&mut child).await.success(), "a reaped worker exits non-zero");
 }
+
+/// An orchestrator whose register response lacks `agent` (an older or newer wire format): the worker exits at once
+/// with the serde cause, after shipping that line, instead of retrying forever.
+#[tokio::test]
+async fn incompatible_response_is_fatal() {
+    use axum::routing::post;
+    let shipped: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let sink = shipped.clone();
+    let router = axum::Router::new()
+        .route("/workers/{id}/register", post(|| async { axum::Json(serde_json::json!({ "id": "w", "worker_type": "command", "status": "idle" })) }))
+        .route("/workers/{id}/logs", post(move |axum::Json(b): axum::Json<api_client::ShipLogs>| {
+            sink.lock().unwrap().extend(b.lines);
+            async { axum::http::StatusCode::NO_CONTENT }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut child = Proc(
+        Command::new(env!("CARGO_BIN_EXE_worker"))
+            .env("FACTORY_URL", &url)
+            .env("FACTORY_WORKER_ID", "w-00000000")
+            .env("FACTORY_WORKER_TOKEN", "t")
+            .env("FACTORY_AGENT_COMMAND", "true")
+            .env("FACTORY_LOG_INTERVAL", "100ms")
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let status = wait(&mut child).await;
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(child.0.stderr.as_mut().unwrap(), &mut stderr).unwrap();
+    assert!(!status.success(), "{stderr}");
+    let expect = "cannot decode the response to /workers/w-00000000/register: missing field `agent`";
+    assert!(stderr.contains(expect) && stderr.contains("out of step"), "{stderr}");
+    assert!(shipped.lock().unwrap().iter().any(|l| l.contains(expect)), "the fatal line is shipped before exit: {:?}", shipped.lock().unwrap());
+}
