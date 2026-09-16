@@ -6,7 +6,7 @@ import { Detail } from "./Detail.jsx";
 const ticket = (over = {}) => ({ id: 1, title: "T", state: "todo", description: "", links: [], rank: 1, assignee: null,
                                  created_at: "", updated_at: "", comments: [], relations: [], blocked: false, runs: [], ...over });
 const usage = { tokens_in: 0, tokens_out: 0, cost: 0 };
-const ctx = { refresh: vi.fn(), select: vi.fn(), showError: vi.fn() };
+const ctx = { refresh: vi.fn(), select: vi.fn(), showError: vi.fn(), users: [{ principal: "alice-principal", name: "Alice" }] };
 const mount = t => render(<Ctx.Provider value={ctx}><Detail ticket={t} usage={usage} /></Ctx.Provider>);
 afterEach(cleanup);
 
@@ -66,4 +66,16 @@ test("runs are listed newest first and the selected one shows its log", () => {
   const empty = render(<Ctx.Provider value={ctx}><Detail ticket={ticket()} usage={usage} run={null} /></Ctx.Provider>).container;
   expect(empty.querySelector("section#runs .empty").textContent).toBe("No runs yet");
   expect(empty.querySelector(".log")).toBe(null);
+});
+
+test("the owner shows by name and is picked from the approved users, keeping an unknown one", () => {
+  const { container } = mount(ticket({ owner: "alice-principal" }));
+  expect(container.querySelector(".pane p").textContent).toContain("owner: Alice");
+  const owner = container.querySelector("select[name=owner]");
+  expect(owner.value).toBe("alice-principal");
+  expect([...owner.options].map(o => o.textContent)).toEqual(["No owner", "Alice"]);
+  cleanup();
+  const unknown = mount(ticket({ owner: "zzzzz-aaaaa-bbbbb-cai" })).container.querySelector("select[name=owner]");
+  expect([...unknown.options].map(o => o.textContent)).toEqual(["No owner", "Alice", "zzzzz-aaaaa…"]);
+  expect(unknown.value).toBe("zzzzz-aaaaa-bbbbb-cai");
 });

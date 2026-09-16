@@ -1,10 +1,12 @@
 import { test as base, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 const root = path.join(import.meta.dirname, "..", "..", "..", "..");
 const TOKEN = "change-me";
@@ -28,9 +30,20 @@ const test = base.extend({
     const config = path.join(dir, "factory.toml");
     fs.writeFileSync(config, fs.readFileSync(path.join(root, "factory.example.toml"), "utf8").replace('listen = "0.0.0.0:8080"', `listen = "127.0.0.1:${port}"`).replace("http://localhost:8081", `http://127.0.0.1:${provider.address().port}`));
     const proc = spawn(path.join(root, "target/debug/orchestrator"), [config], { stdio: ["ignore", "ignore", "inherit"] });
+    // Signs `principal` in the way the login endpoint will, straight into the database: a users row (pending unless
+    // already there) and a session. Returns the session token.
+    const session = principal => {
+      const db = new DatabaseSync(path.join(dir, "factory.db"));
+      const token = `session-${principal}-${Date.now()}`;
+      db.prepare("INSERT OR IGNORE INTO users (principal, status, created_at) VALUES (?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))").run(principal);
+      db.prepare("INSERT INTO sessions (token_hash, principal, created_at, expires_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+8 hours'))")
+        .run(createHash("sha256").update(token).digest("hex"), principal);
+      db.close();
+      return token;
+    };
     const url = `http://127.0.0.1:${port}`;
     const api = async (p, opts = {}) => {
-      const r = await fetch(url + p, { ...opts, headers: { Authorization: "Bearer " + TOKEN, "Content-Type": "application/json" }, body: opts.body && JSON.stringify(opts.body) });
+      const r = await fetch(url + p, { ...opts, headers: { Authorization: "Bearer " + (opts.token ?? TOKEN), "Content-Type": "application/json" }, body: opts.body && JSON.stringify(opts.body) });
       if (!r.ok) throw new Error(`${opts.method ?? "GET"} ${p}: ${r.status}`);
       return r.json();
     };
@@ -38,7 +51,7 @@ const test = base.extend({
     for (let i = 0; ; i++) {
       try { await api("/tickets", { method: "POST", body: { title: "probe", agent: "claude-code" } }); break; } catch (e) { if (i > 100) throw new Error("orchestrator did not start: " + e.message); await new Promise(r => setTimeout(r, 100)); }
     }
-    await use({ url, api });
+    await use({ url, api, session });
     proc.kill();
     provider.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -239,4 +252,31 @@ test("shows an inline error when a refresh fails", async ({ page }) => {
   await expect(page.locator("#error")).toContainText("forced failure");
   await page.click("#error button");
   await expect(page.locator("#error")).toBeEmpty();
+});
+
+test("shows the owner by name, filters by owner, and reassigns it from the detail", async ({ page, server }) => {
+  await server.api("/users/alice-principal/approve", { method: "POST", body: { name: "Alice" } });
+  await server.api("/users/bob-principal/approve", { method: "POST", body: { name: "Bob" } });
+  const alice = server.session("alice-principal");
+  const owned = await server.api("/tickets", { method: "POST", body: { title: "Alice owns this" }, token: alice });
+  const unowned = await create(server, "Nobody owns this");
+  expect(owned.owner).toBe("alice-principal");
+  await page.goto("/");
+  await expect(card(page, owned.id).locator(".owner")).toHaveText("Alice");
+  await expect(card(page, unowned.id).locator(".owner")).toHaveCount(0);
+  await page.selectOption("#owner-filter", "alice-principal");
+  await expect(card(page, owned.id)).toBeVisible();
+  await expect(card(page, unowned.id)).toHaveCount(0);
+  await page.selectOption("#owner-filter", "none");
+  await expect(card(page, owned.id)).toHaveCount(0);
+  await expect(card(page, unowned.id)).toBeVisible();
+  await page.selectOption("#owner-filter", "");
+  await card(page, owned.id).click();
+  await expect(page.locator("#detail .pane p").first()).toContainText("owner: Alice");
+  await expect(page.locator("#detail select[name=owner] option")).toHaveText(["No owner", "Alice", "Bob"]);
+  await page.selectOption("#detail select[name=owner]", "bob-principal");
+  await page.click("#detail button:text-is('Save')");
+  await expect(page.locator("#detail .saved")).toHaveText("Saved");
+  await expect(card(page, owned.id).locator(".owner")).toHaveText("Bob");
+  expect((await server.api(`/tickets/${owned.id}`)).owner).toBe("bob-principal");
 });

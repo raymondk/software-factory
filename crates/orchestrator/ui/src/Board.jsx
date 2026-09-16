@@ -1,12 +1,12 @@
 import { useState } from "preact/hooks";
 import { api, patch } from "./api.js";
 import { useApp } from "./context.js";
-import { STATES, ago, isHttp } from "./format.js";
+import { STATES, ago, isHttp, userName } from "./format.js";
 
 const upper = (e, c) => { const r = c.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; };
 
 export function Board({ tickets, selected }) {
-  const { refresh, select, showError } = useApp();
+  const { refresh, select, showError, users = [] } = useApp();
   const [drag, setDrag] = useState(null); // { ticket, tickets }: the board shows the snapshot taken at drag start until the drop
   const [over, setOver] = useState(null); // marked drop target: { card, cls } or { column }
   const shown = drag?.tickets ?? tickets;
@@ -37,6 +37,7 @@ export function Board({ tickets, selected }) {
          }}>
       <div>#{t.id} {t.title}</div>
       <div class="meta">
+        {t.owner && <span class="owner" title={t.owner}>{userName(users, t.owner)}</span>}
         {t.assignee && <span>{t.assignee}</span>}
         {t.blocked && <span class="tag blocked" title="Waiting on a dependency">blocked</span>}
         {t.links.filter(isHttp).map(href => <a key={href} href={href} target="_blank" rel="noopener" title={href} onClick={e => e.stopPropagation()}>↗</a>)}
