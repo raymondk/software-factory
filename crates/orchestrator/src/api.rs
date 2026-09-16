@@ -127,6 +127,7 @@ struct Row {
     state: String,
     rank: f64,
     assignee: Option<String>,
+    owner: Option<String>,
     created_at: String,
     updated_at: String,
     links: String,
@@ -147,6 +148,7 @@ impl From<Row> for Ticket {
             state: r.state,
             rank: r.rank,
             assignee: r.assignee,
+            owner: r.owner,
             created_at: r.created_at,
             updated_at: r.updated_at,
             links: serde_json::from_str(&r.links).unwrap_or_default(),
@@ -177,8 +179,8 @@ impl From<CommentRow> for Comment {
     }
 }
 
-const COLUMNS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links, agent, model";
-const COLUMNS_WITH_COMMENTS: &str = "id, title, description, state, rank, assignee, created_at, updated_at, links, agent, model, \
+const COLUMNS: &str = "id, title, description, state, rank, assignee, owner, created_at, updated_at, links, agent, model";
+const COLUMNS_WITH_COMMENTS: &str = "id, title, description, state, rank, assignee, owner, created_at, updated_at, links, agent, model, \
     (SELECT COUNT(*) FROM comments c WHERE c.ticket_id = tickets.id AND NOT c.resolved) AS unresolved_comments";
 const COMMENT_COLUMNS: &str = "id, ticket_id, author, body, created_at, resolved";
 /// Spec 3.7: a `ready` ticket with a dependency that is not yet `in_review` or `done`. Evaluated against `tickets`.
@@ -187,7 +189,12 @@ pub const BLOCKED: &str = "(tickets.state = 'ready' AND EXISTS (SELECT 1 FROM ti
 const RELATION_TYPES: [&str; 2] = ["depends_on", "related_to"];
 pub(crate) const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
-async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTicket>) -> Result<(StatusCode, Json<Ticket>), ApiError> {
+/// The owner is the creating developer; the admin sets none; a worker passes on the owner of the ticket it holds.
+async fn create_ticket(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Json(req): Json<CreateTicket>,
+) -> Result<(StatusCode, Json<Ticket>), ApiError> {
     if req.title.trim().is_empty() {
         return Err(ApiError::BadRequest("title must not be empty"));
     }
@@ -196,9 +203,18 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
         return Err(ApiError::BadRequest("invalid state"));
     }
     check_advertised(&state, req.agent.as_deref(), req.model.as_deref())?;
+    let owner = match &caller {
+        Caller::User { principal, .. } => Some(principal.clone()),
+        Caller::Admin => None,
+        Caller::Worker(w) => {
+            let held: Option<(Option<String>,)> =
+                sqlx::query_as("SELECT owner FROM tickets WHERE assignee = ?1 ORDER BY rank ASC, id ASC LIMIT 1").bind(w).fetch_optional(&state.pool).await?;
+            held.and_then(|(o,)| o)
+        }
+    };
     let row: Row = sqlx::query_as(&format!(
-        "INSERT INTO tickets (title, description, state, rank, created_at, updated_at, agent, model) \
-         VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(rank), 0) + 1 FROM tickets), {NOW}, {NOW}, ?4, ?5) \
+        "INSERT INTO tickets (title, description, state, rank, created_at, updated_at, agent, model, owner) \
+         VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(rank), 0) + 1 FROM tickets), {NOW}, {NOW}, ?4, ?5, ?6) \
          RETURNING {COLUMNS}"
     ))
     .bind(&req.title)
@@ -206,6 +222,7 @@ async fn create_ticket(State(state): State<AppState>, Json(req): Json<CreateTick
     .bind(state_name)
     .bind(&req.agent)
     .bind(&req.model)
+    .bind(owner)
     .fetch_one(&state.pool)
     .await?;
     Ok((StatusCode::CREATED, Json(row.into())))
@@ -226,11 +243,12 @@ fn check_advertised(state: &AppState, agent: Option<&str>, model: Option<&str>) 
 // The list leaves `comments` empty; only GET /tickets/{id} embeds the thread, to avoid a query per ticket.
 async fn list_tickets(State(state): State<AppState>, Query(filter): Query<ListTickets>) -> Result<Json<Vec<Ticket>>, ApiError> {
     let rows: Vec<Row> = sqlx::query_as(&format!(
-        "SELECT {COLUMNS_WITH_COMMENTS}, {BLOCKED} AS blocked FROM tickets WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR assignee = ?2) \
-         ORDER BY rank ASC, id ASC"
+        "SELECT {COLUMNS_WITH_COMMENTS}, {BLOCKED} AS blocked FROM tickets \
+         WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR assignee = ?2) AND (?3 IS NULL OR owner = ?3) ORDER BY rank ASC, id ASC"
     ))
     .bind(&filter.state)
     .bind(&filter.assignee)
+    .bind(&filter.owner)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows.into_iter().map(Ticket::from).collect()))
@@ -488,7 +506,7 @@ async fn update_ticket(
          state = COALESCE(?4, state), \
          assignee = CASE WHEN ?5 THEN ?6 WHEN ?4 IS NOT NULL AND ?4 != state AND NOT ?8 THEN NULL ELSE assignee END, \
          links = COALESCE(?7, links), agent = CASE WHEN ?9 THEN ?10 ELSE agent END, model = CASE WHEN ?11 THEN ?12 ELSE model END, \
-         updated_at = {NOW} WHERE id = ?1 RETURNING {COLUMNS}"
+         owner = CASE WHEN ?13 THEN ?14 ELSE owner END, updated_at = {NOW} WHERE id = ?1 RETURNING {COLUMNS}"
     ))
     .bind(id)
     .bind(&req.title)
@@ -502,6 +520,8 @@ async fn update_ticket(
     .bind(req.agent.clone().flatten())
     .bind(req.model.is_some())
     .bind(req.model.clone().flatten())
+    .bind(req.owner.is_some())
+    .bind(req.owner.clone().flatten())
     .fetch_optional(&state.pool)
     .await?;
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)

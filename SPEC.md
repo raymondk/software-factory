@@ -74,6 +74,7 @@ Transitions are not restricted by the orchestrator beyond the ACL. Prompts tell 
 ### 3.6 Fields
 
 - `id`, `title`, `description`, `state`, `rank`, `assignee`, `created_at`, `updated_at`
+- `owner`: the developer who created the ticket, by principal; null when the admin did, and passed on from the ticket a worker holds when the worker did. Informational, editable, no permission depends on it.
 - `links`: list of URLs such as pull requests, added by workers
 - `comments`
 - `relations`: see 3.7
@@ -109,10 +110,10 @@ Ticket JSON lists each relation with the other ticket's id, title and state, as 
 All endpoints require a bearer token: the admin's `orchestrator.token`, a developer's session or personal token, or a worker's token issued at start. Developers are Internet Identity principals; one who signs in is `pending` until the admin approves them under a name (`factory user approve`), and may only call `GET /me` until then. Only token hashes are stored.
 
 Tickets:
-- `GET /tickets` with optional `state` and `assignee` filters, ordered by rank
+- `GET /tickets` with optional `state`, `assignee` and `owner` filters, ordered by rank
 - `POST /tickets`
 - `GET /tickets/{id}`
-- `PATCH /tickets/{id}`: title, description, state, assignee, links, agent, model. Subject to ACL. `agent` and `model` are rejected unless some provider advertised them in its last status.
+- `PATCH /tickets/{id}`: title, description, state, assignee, owner, links, agent, model. Subject to ACL. `agent` and `model` are rejected unless some provider advertised them in its last status.
 - `POST /tickets/{id}/move`: body `{ before: id }` or `{ after: id }`. Reorders the ticket.
 - `GET /tickets/{id}/comments`
 - `POST /tickets/{id}/comments`

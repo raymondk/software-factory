@@ -232,7 +232,7 @@ async fn list_filters() {
     client.update_ticket(b.id, &assignee(Some("w2"))).await.unwrap();
 
     let ids = |list: Vec<api_client::Ticket>| list.into_iter().map(|t| t.id).collect::<Vec<_>>();
-    let by = |state: Option<&str>, assignee: Option<&str>| ListTickets { state: state.map(Into::into), assignee: assignee.map(Into::into) };
+    let by = |state: Option<&str>, assignee: Option<&str>| ListTickets { state: state.map(Into::into), assignee: assignee.map(Into::into), ..Default::default() };
     assert_eq!(ids(client.list_tickets(&by(Some("ready"), None)).await.unwrap()), vec![a.id, c.id]);
     assert_eq!(ids(client.list_tickets(&by(Some("todo"), None)).await.unwrap()), vec![b.id]);
     assert_eq!(ids(client.list_tickets(&by(None, Some("w1"))).await.unwrap()), vec![c.id]);

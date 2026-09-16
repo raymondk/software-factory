@@ -4,6 +4,8 @@ export const ACTIONS = { todo: [["Mark ready", "ready"]], ready: [["Back to todo
                          in_review: [["Done", "done"], ["Back to todo", "todo"]], failed: [["Retry", "ready"]] };
 
 export const isHttp = href => /^https?:\/\//.test(href);
+// A user's name, or a shortened principal when the user is unknown (pending, revoked, or the list not loaded).
+export const userName = (users, principal) => users.find(u => u.principal === principal)?.name ?? principal.replace(/^([^-]+-[^-]+)-.+$/, "$1…");
 export const usageLine = u => `tokens in: ${u.tokens_in} · tokens out: ${u.tokens_out} · cost: $${u.cost.toFixed(2)}`;
 
 export const ago = (iso, now = Date.now()) => {

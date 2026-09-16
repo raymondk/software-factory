@@ -145,3 +145,42 @@ async fn expired_sessions_are_rejected() {
     assert_eq!(status(expired.list_tickets(&Default::default()).await), 401);
     Client::new(&url, session(&dir, "alice-principal", 1).await).me().await.unwrap();
 }
+
+#[tokio::test]
+async fn owner_is_the_creating_developer_filterable_and_editable() {
+    let (url, dir) = serve().await;
+    let admin = Client::new(&url, TOKEN);
+    admin.approve_user("alice-principal", &ApproveUser { name: "Alice".into() }).await.unwrap();
+    admin.approve_user("bob-principal", &ApproveUser { name: "Bob".into() }).await.unwrap();
+    let alice = Client::new(&url, session(&dir, "alice-principal", 1).await);
+    let bob = Client::new(&url, session(&dir, "bob-principal", 1).await);
+
+    let a = alice.create_ticket(&CreateTicket { title: "alice's".into(), state: Some("ready".into()), ..Default::default() }).await.unwrap();
+    let b = bob.create_ticket(&CreateTicket { title: "bob's".into(), ..Default::default() }).await.unwrap();
+    let none = admin.create_ticket(&CreateTicket { title: "admin's".into(), ..Default::default() }).await.unwrap();
+    assert_eq!((a.owner.as_deref(), b.owner.as_deref(), none.owner), (Some("alice-principal"), Some("bob-principal"), None));
+    assert_eq!(admin.get_ticket(a.id).await.unwrap().owner.as_deref(), Some("alice-principal"));
+
+    let ids = |ts: Vec<api_client::Ticket>| ts.into_iter().map(|t| t.id).collect::<Vec<_>>();
+    let by_owner = |o: &str| api_client::ListTickets { owner: Some(o.into()), ..Default::default() };
+    assert_eq!(ids(bob.list_tickets(&by_owner("alice-principal")).await.unwrap()), [a.id]);
+    assert_eq!(ids(admin.list_tickets(&by_owner("nobody")).await.unwrap()), Vec::<i64>::new());
+
+    // A worker holding alice's ticket creates one: it belongs to alice too. A worker holding nothing sets no owner.
+    let w = admin.create_worker(&CreateWorker { agent: "claude-code".into(), provider: None }).await.unwrap();
+    let worker = Client::new(&url, &w.token);
+    worker.register(&w.id).await.unwrap();
+    let idle = worker.create_ticket(&CreateTicket { title: "from an idle worker".into(), ..Default::default() }).await.unwrap();
+    assert_eq!(idle.owner, None);
+    assert_eq!(worker.poll(&w.id, None).await.unwrap().unwrap().ticket.id, a.id);
+    let spawned = worker.create_ticket(&CreateTicket { title: "follow-up".into(), ..Default::default() }).await.unwrap();
+    assert_eq!(spawned.owner.as_deref(), Some("alice-principal"));
+
+    // Anyone may reassign or clear the owner; an omitted field is untouched.
+    let t = bob.update_ticket(a.id, &api_client::UpdateTicket { owner: Some(Some("bob-principal".into())), ..Default::default() }).await.unwrap();
+    assert_eq!(t.owner.as_deref(), Some("bob-principal"));
+    let t = bob.update_ticket(a.id, &api_client::UpdateTicket { title: Some("renamed".into()), ..Default::default() }).await.unwrap();
+    assert_eq!(t.owner.as_deref(), Some("bob-principal"));
+    let t = admin.update_ticket(a.id, &api_client::UpdateTicket { owner: Some(None), ..Default::default() }).await.unwrap();
+    assert_eq!(t.owner, None);
+}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { api } from "./api.js";
 import { Ctx, useApp, useBusy } from "./context.js";
-import { STATES } from "./format.js";
+import { STATES, userName } from "./format.js";
 import { Board } from "./Board.jsx";
 import { Detail } from "./Detail.jsx";
 import { Workers } from "./Workers.jsx";
@@ -24,6 +24,8 @@ export function App() {
   const [workers, setWorkers] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [agents, setAgents] = useState({}); // what the providers advertise: agent -> models
+  const [users, setUsers] = useState([]); // approved developers, to name owners
+  const [owner, setOwner] = useState(""); // board filter: a principal, "none", or "" for all
   const [selected, setSelected] = useState(idFromHash);
   const [run, setRun] = useState(runFromHash);
   const [workerLog, setWorkerLog] = useState(workerFromHash);
@@ -38,9 +40,9 @@ export function App() {
   const refresh = useCallback(async fromPoll => {
     const id = selectedRef.current;
     try {
-      const [ts, ws, m, ag, t] = await Promise.all([api("/tickets"), api("/workers"), api("/metrics"), api("/agents"),
+      const [ts, ws, m, ag, us, t] = await Promise.all([api("/tickets"), api("/workers"), api("/metrics"), api("/agents"), api("/users"),
         id == null ? null : api("/tickets/" + id).catch(e => { if (e.message !== "not found") throw e; })]);
-      setTickets(ts); setWorkers(ws); setMetrics(m); setAgents(ag);
+      setTickets(ts); setWorkers(ws); setMetrics(m); setAgents(ag); setUsers(us);
       if (id != null && !t) { showError(`Ticket ${id} not found`); clearHash(); setSelected(null); }
       if (selectedRef.current === id) setTicket(t ?? null);
       if (fromPoll) setError(e => e?.fromPoll ? null : e);
@@ -98,13 +100,22 @@ export function App() {
   const loggedWorker = workerLog && (workers.find(w => w.id === workerLog) ?? { id: workerLog, status: "?" });
 
   const usage = ticket && (metrics?.per_ticket.find(x => x.ticket_id === ticket.id) ?? { tokens_in: 0, tokens_out: 0, cost: 0 });
+  const shown = tickets?.filter(t => owner === "" || (owner === "none" ? t.owner == null : t.owner === owner));
+  // Owners the board can filter by: every approved user, plus whoever else owns a ticket.
+  const owners = [...new Set([...users.map(u => u.principal), ...(tickets ?? []).map(t => t.owner).filter(Boolean)])];
   return (
-    <Ctx.Provider value={{ refresh, select, showError }}>
+    <Ctx.Provider value={{ refresh, select, showError, users }}>
       <div id="top"><h1>Software Factory</h1><ConfigDialog /></div>
       <div id="error">{error && <><span>{error.message}</span><button onClick={() => setError(null)}>×</button></>}</div>
       <section>
-        <CreateDialog agents={agents} />
-        <div id="board">{tickets ? <Board tickets={tickets} selected={selected} /> : <span id="loading">Loading…</span>}</div>
+        <CreateDialog agents={agents}>
+          <select id="owner-filter" aria-label="Owner" value={owner} onChange={e => setOwner(e.currentTarget.value)}>
+            <option value="">All owners</option>
+            {owners.map(p => <option key={p} value={p}>{userName(users, p)}</option>)}
+            <option value="none">No owner</option>
+          </select>
+        </CreateDialog>
+        <div id="board">{tickets ? <Board tickets={shown} selected={selected} /> : <span id="loading">Loading…</span>}</div>
       </section>
       <dialog id="detail" ref={dialog} onClose={dismissed} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
         {ticket && <Detail key={ticket.id} ticket={ticket} usage={usage} run={run} agents={agents} />}
@@ -121,8 +132,9 @@ export function App() {
   );
 }
 
-// "New ticket" opens a dialog with the form; a failed request shows its error inside and keeps the input.
-function CreateDialog({ agents }) {
+// "New ticket" opens a dialog with the form; a failed request shows its error inside and keeps the input. `children`
+// share the toolbar.
+function CreateDialog({ agents, children }) {
   const { refresh } = useApp();
   const dialog = useRef();
   const [error, setError] = useState(null);
@@ -139,7 +151,7 @@ function CreateDialog({ agents }) {
   });
   return (
     <>
-      <div id="toolbar"><button class="primary" onClick={() => { setError(null); dialog.current.showModal(); }}>New ticket</button></div>
+      <div id="toolbar"><button class="primary" onClick={() => { setError(null); dialog.current.showModal(); }}>New ticket</button>{children}</div>
       <dialog ref={dialog}>
         <Header kind="Ticket" title="New ticket" onClose={() => dialog.current.close()} />
         <form id="create" class="scroll" tabindex={-1} autofocus onSubmit={submit}>

@@ -137,6 +137,9 @@ enum TicketCommand {
         state: Option<String>,
         #[arg(long)]
         assignee: Option<String>,
+        /// The creating developer's principal
+        #[arg(long)]
+        owner: Option<String>,
     },
     /// Show one ticket
     View { id: i64 },
@@ -154,6 +157,11 @@ enum TicketCommand {
         assignee: Option<String>,
         #[arg(long)]
         clear_assignee: bool,
+        /// The owning developer's principal
+        #[arg(long, conflicts_with = "clear_owner")]
+        owner: Option<String>,
+        #[arg(long)]
+        clear_owner: bool,
         /// Append a link; repeatable
         #[arg(long = "add-link", value_name = "URL")]
         add_link: Vec<String>,
@@ -224,13 +232,13 @@ async fn main() -> anyhow::Result<()> {
             TicketCommand::Create { title, description, state, agent, model } => {
                 print(&client.create_ticket(&CreateTicket { title, description, state, agent, model }).await?)
             }
-            TicketCommand::List { state, assignee } => {
-                for t in client.list_tickets(&ListTickets { state, assignee }).await? {
+            TicketCommand::List { state, assignee, owner } => {
+                for t in client.list_tickets(&ListTickets { state, assignee, owner }).await? {
                     println!("#{}\t{}\t{}\t{}", t.id, t.state, t.rank, t.title);
                 }
             }
             TicketCommand::View { id } => print(&client.get_ticket(id).await?),
-            TicketCommand::Edit { id, title, description, state, assignee, clear_assignee, add_link, agent, clear_agent, model, clear_model } => {
+            TicketCommand::Edit { id, title, description, state, assignee, clear_assignee, owner, clear_owner, add_link, agent, clear_agent, model, clear_model } => {
                 let links = if add_link.is_empty() {
                     None
                 } else {
@@ -239,9 +247,10 @@ async fn main() -> anyhow::Result<()> {
                     Some(links)
                 };
                 let assignee = if clear_assignee { Some(None) } else { assignee.map(Some) };
+                let owner = if clear_owner { Some(None) } else { owner.map(Some) };
                 let agent = if clear_agent { Some(None) } else { agent.map(Some) };
                 let model = if clear_model { Some(None) } else { model.map(Some) };
-                print(&client.update_ticket(id, &UpdateTicket { title, description, state, assignee, links, agent, model }).await?)
+                print(&client.update_ticket(id, &UpdateTicket { title, description, state, assignee, owner, links, agent, model }).await?)
             }
             TicketCommand::Move { id, before, after } => print(&client.move_ticket(id, &MoveTicket { before, after }).await?),
             TicketCommand::Link { id, depends_on, related_to } => {

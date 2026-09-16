@@ -10,6 +10,9 @@ pub struct Ticket {
     pub state: String,
     pub rank: f64,
     pub assignee: Option<String>,
+    /// The developer who created the ticket, by principal; null for the admin. Informational.
+    #[serde(default)]
+    pub owner: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub links: Vec<String>,
@@ -119,7 +122,7 @@ pub struct CreateTicket {
     pub model: Option<String>,
 }
 
-/// Partial update. `None` leaves a field untouched; `assignee`, `agent` and `model` as `Some(None)` clear it.
+/// Partial update. `None` leaves a field untouched; `assignee`, `owner`, `agent` and `model` as `Some(None)` clear it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateTicket {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +133,8 @@ pub struct UpdateTicket {
     pub state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub assignee: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub owner: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
@@ -158,6 +163,8 @@ pub struct ListTickets {
     pub state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 /// A worker as listed by the orchestrator. `ticket` is the ticket it currently holds. Never carries the token.
