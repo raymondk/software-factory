@@ -18,8 +18,10 @@ heartbeat_timeout = "60s"
 max_workers = 4
 [providers.a]
 url = "http://localhost:8081"
+token = "pa"
 [providers.b]
 url = "http://localhost:8082"
+token = "pb"
 [agents.claude-code]
 run_timeout = "1h"
 [agents.codex]

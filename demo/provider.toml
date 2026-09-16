@@ -1,6 +1,7 @@
 [provider]
 listen = "0.0.0.0:8081"
 max_workers = 2
+token = "demo-provider-token"
 
 [agents.claude-code]
 image = "software-factory/worker:latest"

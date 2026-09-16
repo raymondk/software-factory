@@ -41,7 +41,7 @@ fn docker_ready() -> bool {
 
 fn config(image: &str, max_workers: u32) -> Config {
     Config::parse(&format!(
-        "[provider]\nlisten = \"127.0.0.1:0\"\nmax_workers = {max_workers}\n\
+        "[provider]\nlisten = \"127.0.0.1:0\"\nmax_workers = {max_workers}\ntoken = \"provider-secret\"\n\
          [agents.claude-code]\nimage = \"{image}\"\nmodels = [\"sonnet\", \"opus\"]\ndefault_model = \"sonnet\"\n\
          [agents.other]\nimage = \"no-such-image\"\nmodels = [\"m\"]\ndefault_model = \"m\"\n\
          [worker_env]\nGIT_TOKEN = \"git-secret\"\n"
@@ -89,6 +89,7 @@ async fn start(url: &str, worker_id: &str) -> reqwest::Response {
 async fn start_agent(url: &str, worker_id: &str, agent: &str) -> reqwest::Response {
     reqwest::Client::new()
         .post(format!("{url}/workers"))
+        .bearer_auth("provider-secret")
         .json(&json!({
             "worker_id": worker_id,
             "agent": agent,
@@ -101,7 +102,7 @@ async fn start_agent(url: &str, worker_id: &str, agent: &str) -> reqwest::Respon
 }
 
 async fn stop(url: &str, worker_id: &str) -> StatusCode {
-    reqwest::Client::new().delete(format!("{url}/workers/{worker_id}")).send().await.unwrap().status()
+    reqwest::Client::new().delete(format!("{url}/workers/{worker_id}")).bearer_auth("provider-secret").send().await.unwrap().status()
 }
 
 async fn status(url: &str) -> Value {

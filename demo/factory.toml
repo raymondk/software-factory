@@ -16,6 +16,7 @@ interval = "2s"
 
 [providers.local]
 url = "http://localhost:8081"
+token = "demo-provider-token"
 
 [agents.claude-code]
 run_timeout = "30m"
