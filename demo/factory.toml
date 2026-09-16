@@ -7,6 +7,7 @@ repos = ["https://github.com/YOUR-USER/YOUR-REPO.git"]
 listen = "0.0.0.0:8080"
 token = "demo-token"
 heartbeat_timeout = "60s"
+# log_retention = "7d"   # worker log lines older than this are purged; runs are kept
 # Workers run in containers and reach the host over docker0.
 public_url = "http://172.17.0.1:8080"
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use api_client::{Client, CreateComment, CreateRelation, CreateTicket, CreateWorker, Error, MoveTicket, NewWorker, ReportUsage, ShipLogs, Totals, UpdateTicket};
+use orchestrator::reaper;
 use tokio::sync::Barrier;
 
 mod common;
@@ -572,4 +573,36 @@ async fn metrics_aggregate_and_count_ticket_states() {
     // Reverting a state reverts the count.
     human.update_ticket(t2, &set_state("in_review")).await.unwrap();
     assert_eq!(human.metrics().await.unwrap().totals.tickets_failed, 0);
+}
+
+/// Spec 4.7 retention: lines of runs that ended long ago and old run-less lines go; fresh lines, lines of open or
+/// recently ended runs, and every run row stay.
+#[tokio::test]
+async fn old_log_lines_are_purged_runs_are_kept() {
+    use std::time::Duration;
+    let (url, dir) = serve().await;
+    let human = Client::new(&url, TOKEN);
+    let pool = orchestrator::db::open(&dir.path().join("test.db")).await.unwrap();
+    let (w, worker) = worker(&url, &human, "claude-code").await;
+    worker.register(&w.id).await.unwrap();
+    worker.ship_logs(&w.id, &ShipLogs { run: None, lines: vec!["starting".into()] }).await.unwrap();
+    let old = ticket(&human, "old", "ready").await;
+    let old_run = worker.poll(&w.id, None).await.unwrap().unwrap().run;
+    worker.ship_logs(&w.id, &ShipLogs { run: Some(old_run), lines: vec!["old work".into()] }).await.unwrap();
+    worker.report_usage(&w.id, &ReportUsage { ticket_id: old, tokens_in: 1, tokens_out: 1, cost: 0.0, model: None }).await.unwrap();
+    let fresh = ticket(&human, "fresh", "ready").await;
+    let open_run = worker.poll(&w.id, None).await.unwrap().unwrap().run;
+    worker.ship_logs(&w.id, &ShipLogs { run: Some(open_run), lines: vec!["still going".into()] }).await.unwrap();
+    // Age the first run and the startup line by ten days; the open run has no end and stays whatever its age.
+    let ten_days_ago = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 days')";
+    sqlx::query(&format!("UPDATE runs SET ended_at = {ten_days_ago} WHERE id = ?1")).bind(old_run).execute(&pool).await.unwrap();
+    sqlx::query(&format!("UPDATE log_lines SET created_at = {ten_days_ago} WHERE run_id IS NULL OR run_id = ?1")).bind(open_run).execute(&pool).await.unwrap();
+
+    assert_eq!(reaper::purge_logs(&pool, Duration::from_secs(30 * 86400)).await.unwrap(), 0, "within retention nothing goes");
+    assert_eq!(reaper::purge_logs(&pool, Duration::from_secs(7 * 86400)).await.unwrap(), 2);
+    let lines: Vec<String> = human.worker_logs(&w.id, None).await.unwrap().into_iter().map(|l| l.line).collect();
+    assert_eq!(lines, ["still going"]);
+    assert!(human.run_logs(old_run, None).await.unwrap().is_empty());
+    assert_eq!(human.get_ticket(old).await.unwrap().runs.len(), 1, "the run row survives its lines");
+    assert_eq!(human.get_ticket(fresh).await.unwrap().runs[0].id, open_run);
 }
