@@ -51,13 +51,22 @@ const test = base.extend({
     for (let i = 0; ; i++) {
       try { await api("/tickets", { method: "POST", body: { title: "probe", agent: "claude-code" } }); break; } catch (e) { if (i > 100) throw new Error("orchestrator did not start: " + e.message); await new Promise(r => setTimeout(r, 100)); }
     }
-    await use({ url, api, session });
+    // The developer the browser is signed in as, unless a test says otherwise.
+    await api("/users/dev-principal/approve", { method: "POST", body: { name: "Dev" } });
+    await use({ url, api, session, dev: session("dev-principal") });
     proc.kill();
     provider.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }, { scope: "worker" }],
   baseURL: async ({ server }, use) => use(server.url),
+  // Signed in as Dev: the session token sits in localStorage as the login flow leaves it. Internet Identity itself is
+  // not driven here.
+  page: async ({ page, server }, use) => {
+    await page.addInitScript(t => localStorage.setItem("factory.token", t), server.dev);
+    await use(page);
+  },
 });
+const signedInAs = (page, token) => page.addInitScript(t => localStorage.setItem("factory.token", t), token);
 
 const card = (page, id) => page.locator(`.card[data-id="${id}"]`);
 const create = (server, title) => server.api("/tickets", { method: "POST", body: { title } });
@@ -273,10 +282,71 @@ test("shows the owner by name, filters by owner, and reassigns it from the detai
   await page.selectOption("#owner-filter", "");
   await card(page, owned.id).click();
   await expect(page.locator("#detail .pane p").first()).toContainText("owner: Alice");
-  await expect(page.locator("#detail select[name=owner] option")).toHaveText(["No owner", "Alice", "Bob"]);
+  await expect(page.locator("#detail select[name=owner] option")).toHaveText(["No owner", "Dev", "Alice", "Bob"]);
   await page.selectOption("#detail select[name=owner]", "bob-principal");
   await page.click("#detail button:text-is('Save')");
   await expect(page.locator("#detail .saved")).toHaveText("Saved");
   await expect(card(page, owned.id).locator(".owner")).toHaveText("Bob");
   expect((await server.api(`/tickets/${owned.id}`)).owner).toBe("bob-principal");
+});
+
+test("without a session the sign-in screen shows and nothing else loads", async ({ page }) => {
+  await page.addInitScript(() => localStorage.removeItem("factory.token"));
+  const calls = [];
+  await page.route("**/tickets", route => { calls.push(route.request().url()); route.continue(); });
+  await page.goto("/");
+  await expect(page.locator("button:text-is('Sign in with Internet Identity')")).toBeVisible();
+  await expect(page.locator("#board")).toHaveCount(0);
+  expect(await page.content()).not.toContain(TOKEN);
+  expect(calls).toEqual([]);
+});
+
+test("an expired session drops back to the sign-in screen", async ({ page, server }) => {
+  await signedInAs(page, "no-such-session");
+  await page.goto("/");
+  await expect(page.locator("button:text-is('Sign in with Internet Identity')")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("factory.token"))).toBe(null);
+  // A revoked session mid-use does the same.
+  await signedInAs(page, server.dev);
+  await page.goto("/");
+  await expect(page.locator("#board")).toBeVisible();
+  await page.route("**/tickets", route => route.fulfill({ status: 401, contentType: "application/json", body: '{"error":"unauthorized"}' }));
+  await expect(page.locator("button:text-is('Sign in with Internet Identity')")).toBeVisible();
+});
+
+test("a pending user waits with their principal until the admin approves", async ({ page, server }) => {
+  await signedInAs(page, server.session("newbie-principal"));
+  await page.goto("/");
+  const waiting = page.locator("main.login");
+  await expect(waiting).toContainText("Waiting for approval");
+  await expect(waiting.locator("pre")).toHaveText('factory user approve newbie-principal --name "…"');
+  await expect(page.locator("#board")).toHaveCount(0);
+  await server.api("/users/newbie-principal/approve", { method: "POST", body: { name: "Newbie" } });
+  await expect(page.locator("#board")).toBeVisible({ timeout: 10000 });
+  await expect(page.locator("#user")).toContainText("Newbie");
+});
+
+test("the header names the user; tokens are created, shown once and revoked; log out ends the session", async ({ page, server }) => {
+  await page.goto("/");
+  await expect(page.locator("#user")).toContainText("Dev");
+  await page.click("#user button:text-is('Tokens')");
+  const dialog = page.locator("#tokens");
+  await expect(dialog).toContainText("No tokens yet");
+  await page.fill("#tokens input[name=name]", "laptop");
+  await page.click("#tokens button:text-is('Create token')");
+  const once = dialog.locator(".token-once pre");
+  await expect(once).toContainText("FACTORY_TOKEN=");
+  const token = (await once.textContent()).replace("FACTORY_TOKEN=", "").trim();
+  expect((await server.api("/me", { token })).name).toBe("Dev");
+  await expect(dialog.locator("tbody tr")).toHaveText([/laptop/]);
+  expect(await dialog.locator("tbody").textContent()).not.toContain(token);
+  await dialog.locator("button:text-is('Revoke')").click();
+  await expect(dialog).toContainText("No tokens yet");
+  await expect(server.api("/me", { token })).rejects.toThrow("401");
+  await page.keyboard.press("Escape");
+  const session = await page.evaluate(() => localStorage.getItem("factory.token"));
+  await page.click("#user button:text-is('Log out')");
+  await expect(page.locator("button:text-is('Sign in with Internet Identity')")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("factory.token"))).toBe(null);
+  await expect(server.api("/me", { token: session })).rejects.toThrow("401");
 });
