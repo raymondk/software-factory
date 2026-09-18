@@ -158,7 +158,7 @@ async fn success_moves_on_and_reports_usage() {
         .worker(
             r#"cat > stdin.txt
 printf '%s' "$PROMPT" > prompt.txt
-printf '%s' "$GIT_CONFIG_VALUE_0" > git.txt
+printf '%s' "$GIT_CONFIG_COUNT $GIT_CONFIG_KEY_0=$GIT_CONFIG_VALUE_0 $GIT_CONFIG_KEY_1=$GIT_CONFIG_VALUE_1 $GIT_CONFIG_KEY_2=$GIT_CONFIG_VALUE_2" > git.txt
 printf '%s' "$FACTORY_REPOS" > repos.txt
 printf '%s' "$MODEL" > model.txt
 patch '{"state":"in_review"}'
@@ -194,7 +194,11 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
     let prompt = format!("Work on #{id}: hello");
     assert_eq!(std::fs::read_to_string(ws.join("stdin.txt")).unwrap(), prompt);
     assert_eq!(std::fs::read_to_string(ws.join("prompt.txt")).unwrap(), prompt);
-    assert_eq!(std::fs::read_to_string(ws.join("git.txt")).unwrap(), format!("store --file={}", ws.join(".git-credentials").display()));
+    // A git identity per worker, then the credential store.
+    assert_eq!(
+        std::fs::read_to_string(ws.join("git.txt")).unwrap(),
+        format!("3 user.name=factory worker {wid} user.email={wid}@factory.invalid credential.helper=store --file={}", ws.join(".git-credentials").display())
+    );
     assert_eq!(std::fs::read_to_string(ws.join(".git-credentials")).unwrap(), "https://x-access-token:t0k@github.com\n");
     assert_eq!(std::fs::read_to_string(ws.join("repos.txt")).unwrap(), "https://github.com/org/a.git");
     let deadline = Instant::now() + Duration::from_secs(10);

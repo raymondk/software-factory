@@ -236,8 +236,9 @@ impl Worker {
     }
 
     /// Creates the workspace and returns the agent's extra environment: orchestrator access, the project's repos
-    /// (space-separated in `FACTORY_REPOS`) and, when `GIT_TOKEN` is set, git and gh credentials (a `.git-credentials`
-    /// store in the workspace, wired in via `GIT_CONFIG_*`).
+    /// (space-separated in `FACTORY_REPOS`), a git identity per worker so commits never fail on a missing author, and,
+    /// when `GIT_TOKEN` is set, git and gh credentials (a `.git-credentials` store in the workspace). Git settings go
+    /// in via `GIT_CONFIG_*`, leaving the image untouched.
     fn prepare(&self, ticket: i64, repos: &[String]) -> anyhow::Result<Vec<(String, String)>> {
         std::fs::create_dir_all(&self.workspace).with_context(|| format!("creating {}", self.workspace.display()))?;
         let mut env = vec![
@@ -247,17 +248,19 @@ impl Worker {
             ("FACTORY_TICKET".to_string(), ticket.to_string()),
             ("FACTORY_REPOS".to_string(), repos.join(" ")),
         ];
+        let mut git = vec![("user.name", format!("factory worker {}", self.id)), ("user.email", format!("{}@factory.invalid", self.id))];
         if let Ok(token) = std::env::var("GIT_TOKEN") {
             use std::os::unix::fs::PermissionsExt;
             let file = self.workspace.join(".git-credentials");
             std::fs::write(&file, format!("https://x-access-token:{token}@github.com\n"))?;
             std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
-            env.extend([
-                ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
-                ("GIT_CONFIG_KEY_0".to_string(), "credential.helper".to_string()),
-                ("GIT_CONFIG_VALUE_0".to_string(), format!("store --file={}", file.display())),
-                ("GH_TOKEN".to_string(), token),
-            ]);
+            git.push(("credential.helper", format!("store --file={}", file.display())));
+            env.push(("GH_TOKEN".to_string(), token));
+        }
+        env.push(("GIT_CONFIG_COUNT".to_string(), git.len().to_string()));
+        for (i, (key, value)) in git.into_iter().enumerate() {
+            env.push((format!("GIT_CONFIG_KEY_{i}"), key.to_string()));
+            env.push((format!("GIT_CONFIG_VALUE_{i}"), value));
         }
         Ok(env)
     }
