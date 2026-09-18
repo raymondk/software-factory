@@ -111,7 +111,12 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .log-head span { margin-right: auto; }
 .log-head + .log { margin-top: .35rem; }
 .log { font: 12px/1.45 var(--mono); background: var(--icp-bg-sunk); color: var(--icp-fg); padding: .6rem .75rem; margin: .5rem 0 0; max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-#metrics-section, #workers-section { margin-top: 2.5rem; }
+#metrics-section, #workers-section, #providers-section { margin-top: 2.5rem; }
+#providers td:nth-child(3), #providers td:nth-child(4) { font: 13px var(--mono); }
+#providers td.row { justify-content: flex-end; }
+#add-provider { margin: 1rem 0 0; justify-content: flex-start; }
+#add-provider input { flex: 1; min-width: 0; }
+.hint { color: var(--icp-fg-muted); font-size: 12px; }
 /* Metrics and workers tables each sit in their own bordered pane; the per-agent and per-model panes are spaced apart. */
 .panels { display: grid; gap: 1.25rem; }
 .panel { background: var(--icp-bg-elev); border: 1px solid var(--icp-rule); padding: 1rem 1.25rem; }

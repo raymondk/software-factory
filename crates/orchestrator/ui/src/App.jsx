@@ -5,6 +5,7 @@ import { STATES, userName } from "./format.js";
 import { Board } from "./Board.jsx";
 import { Detail } from "./Detail.jsx";
 import { Workers } from "./Workers.jsx";
+import { Providers } from "./Providers.jsx";
 import { Metrics } from "./Metrics.jsx";
 import { ConfigDialog } from "./Config.jsx";
 import { LogPane } from "./Log.jsx";
@@ -49,6 +50,7 @@ export function App() {
 function Factory({ me, onSignedOut }) {
   const [tickets, setTickets] = useState(null); // null until the first load settles
   const [workers, setWorkers] = useState([]);
+  const [providers, setProviders] = useState([]);
   const [metrics, setMetrics] = useState(null);
   const [agents, setAgents] = useState({}); // what the providers advertise: agent -> models
   const [users, setUsers] = useState([]); // approved developers, to name owners
@@ -67,9 +69,9 @@ function Factory({ me, onSignedOut }) {
   const refresh = useCallback(async fromPoll => {
     const id = selectedRef.current;
     try {
-      const [ts, ws, m, ag, us, t] = await Promise.all([api("/tickets"), api("/workers"), api("/metrics"), api("/agents"), api("/users"),
+      const [ts, ws, ps, m, ag, us, t] = await Promise.all([api("/tickets"), api("/workers"), api("/providers"), api("/metrics"), api("/agents"), api("/users"),
         id == null ? null : api("/tickets/" + id).catch(e => { if (e.message !== "not found") throw e; })]);
-      setTickets(ts); setWorkers(ws); setMetrics(m); setAgents(ag); setUsers(us);
+      setTickets(ts); setWorkers(ws); setProviders(ps); setMetrics(m); setAgents(ag); setUsers(us);
       if (id != null && !t) { showError(`Ticket ${id} not found`); clearHash(); setSelected(null); }
       if (selectedRef.current === id) setTicket(t ?? null);
       if (fromPoll) setError(e => e?.fromPoll ? null : e);
@@ -131,11 +133,11 @@ function Factory({ me, onSignedOut }) {
   // Owners the board can filter by: every approved user, plus whoever else owns a ticket.
   const owners = [...new Set([...users.map(u => u.principal), ...(tickets ?? []).map(t => t.owner).filter(Boolean)])];
   return (
-    <Ctx.Provider value={{ refresh, select, showError, users }}>
+    <Ctx.Provider value={{ refresh, select, showError, users, me }}>
       <div id="top"><h1>Software Factory</h1><div class="row"><UserBar me={me} onSignedOut={onSignedOut} /><ConfigDialog /></div></div>
       <div id="error">{error && <><span>{error.message}</span><button onClick={() => setError(null)}>×</button></>}</div>
       <section>
-        <CreateDialog agents={agents}>
+        <CreateDialog agents={agents} unowned={!!me.admin}>
           <select id="owner-filter" aria-label="Owner" value={owner} onChange={e => setOwner(e.currentTarget.value)}>
             <option value="">All owners</option>
             {owners.map(p => <option key={p} value={p}>{userName(users, p)}</option>)}
@@ -155,13 +157,14 @@ function Factory({ me, onSignedOut }) {
       </dialog>
       <Metrics metrics={metrics} />
       <Workers workers={workers} />
+      <Providers providers={providers} />
     </Ctx.Provider>
   );
 }
 
 // "New ticket" opens a dialog with the form; a failed request shows its error inside and keeps the input. `children`
-// share the toolbar.
-function CreateDialog({ agents, children }) {
+// share the toolbar. The admin's tickets have no owner, so no agent or model can be pinned on them (`unowned`).
+function CreateDialog({ agents, unowned, children }) {
   const { refresh } = useApp();
   const dialog = useRef();
   const [error, setError] = useState(null);
@@ -185,7 +188,7 @@ function CreateDialog({ agents, children }) {
           {error && <div class="error">{error}</div>}
           <input name="title" placeholder="Title" required />
           <select name="state">{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
-          <AgentModel agents={agents} {...pick} onChange={setPick} />
+          <AgentModel agents={agents} {...pick} onChange={setPick} disabled={unowned} />
           <textarea name="description" placeholder="Description" rows={16} />
           <div class="row"><button class="primary">Create ticket</button></div>
         </form>

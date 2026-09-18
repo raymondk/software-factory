@@ -6,16 +6,16 @@ import { LogPane } from "./Log.jsx";
 import { Header } from "./Header.jsx";
 import { AgentModel } from "./AgentModel.jsx";
 
-const FIELDS = ["title", "state", "description", "links", "agent", "model", "owner"];
+const FIELDS = ["title", "state", "description", "links", "agent", "model"];
 const same = (a, b) => FIELDS.every(k => a[k] === b[k]);
 
 // Detail pane for one ticket (remounted per ticket via key). The form follows the server while untouched;
 // once edited it keeps the user's text and offers a reload when the server version changes.
 export function Detail({ ticket: t, usage, run, agents = {} }) {
-  const { refresh, select, users = [] } = useApp();
+  const { refresh, select, users = [], me = {} } = useApp();
   const busy = useBusy();
-  const server = useMemo(() => ({ title: t.title, state: t.state, description: t.description, links: t.links.join("\n"), agent: t.agent ?? "", model: t.model ?? "", owner: t.owner ?? "" }),
-                         [t.title, t.state, t.description, t.links, t.agent, t.model, t.owner]);
+  const server = useMemo(() => ({ title: t.title, state: t.state, description: t.description, links: t.links.join("\n"), agent: t.agent ?? "", model: t.model ?? "" }),
+                         [t.title, t.state, t.description, t.links, t.agent, t.model]);
   const [values, setValues] = useState(server);
   const [loaded, setLoaded] = useState(server); // what the form was last filled with
   const fill = v => { setValues(v); setLoaded(v); };
@@ -28,14 +28,17 @@ export function Detail({ ticket: t, usage, run, agents = {} }) {
   useEffect(() => () => clearTimeout(savedTimer.current), []);
   const save = busy(async e => {
     e.preventDefault();
-    // An empty agent, model or owner clears it (null); the server treats an omitted field as untouched.
-    await patch(t.id, { ...values, links: values.links.split("\n").map(l => l.trim()).filter(Boolean), agent: values.agent.trim() || null, model: values.model.trim() || null, owner: values.owner || null });
+    // An empty agent or model clears it (null); the server treats an omitted field as untouched.
+    await patch(t.id, { ...values, links: values.links.split("\n").map(l => l.trim()).filter(Boolean), agent: values.agent.trim() || null, model: values.model.trim() || null });
     await refresh();
     setSaved(true);
     clearTimeout(savedTimer.current);
     savedTimer.current = setTimeout(() => setSaved(false), 2000);
   });
   const action = state => busy(async () => { await patch(t.id, { state }); await refresh(); });
+  // Spec 3.4: a developer may make themselves the owner and the owner may release the ticket, never while a worker holds it.
+  const setOwner = owner => busy(async () => { await patch(t.id, { owner }); await refresh(); });
+  const free = t.assignee == null && !me.admin;
 
   return (<>
     <Header kind="Ticket" title={`#${t.id} ${t.title}`} onClose={() => select(null)} />
@@ -45,18 +48,16 @@ export function Detail({ ticket: t, usage, run, agents = {} }) {
       <p>{usageLine(usage)}</p>
       {t.blocked && <p class="blocked">blocked by {t.relations.filter(r => r.satisfied === false).map(r => `#${r.ticket}`).join(", ")}</p>}
       <p id="links">{t.links.map(l => isHttp(l) ? <a key={l} href={l} target="_blank" rel="noopener" title={l}>{l}</a> : <span key={l}>{l}</span>)}</p>
-      <div id="actions">{(ACTIONS[t.state] ?? []).map(([label, state]) => <button key={label} onClick={action(state)}>{label}</button>)}</div>
+      <div id="actions">
+        {(ACTIONS[t.state] ?? []).map(([label, state]) => <button key={label} onClick={action(state)}>{label}</button>)}
+        {free && t.owner !== me.principal && <button onClick={setOwner(me.principal)}>Make me owner</button>}
+        {free && t.owner === me.principal && <button onClick={setOwner(null)}>Release ownership</button>}
+      </div>
       <form onSubmit={save}>
         <div class="notice" hidden={same(server, loaded)}>Ticket changed on the server. <button type="button" onClick={() => fill(server)}>Reload</button></div>
         <input name="title" required value={values.title} onInput={set} />
         <select name="state" value={values.state} onChange={set}>{STATES.map(s => <option key={s} value={s}>{s}</option>)}</select>
-        <AgentModel agents={agents} agent={values.agent} model={values.model} onChange={p => setValues({ ...values, ...p })} />
-        <select name="owner" aria-label="Owner" value={values.owner} onChange={set}>
-          <option value="">No owner</option>
-          {/* The current owner stays selectable even when not an approved user. */}
-          {[...users.map(u => u.principal), ...(values.owner && !users.some(u => u.principal === values.owner) ? [values.owner] : [])]
-            .map(p => <option key={p} value={p}>{userName(users, p)}</option>)}
-        </select>
+        <AgentModel agents={agents} agent={values.agent} model={values.model} onChange={p => setValues({ ...values, ...p })} disabled={!t.owner} />
         <textarea name="description" rows={10} value={values.description} onInput={set} />
         <textarea name="links" rows={3} placeholder="Links, one per line" value={values.links} onInput={set} />
         <div class="row"><span class="saved" hidden={!saved}>Saved</span><button class="primary">Save</button></div>

@@ -237,6 +237,36 @@ test("opens the configuration read-only from the cog, without the token", async 
   await expect(dialog).toBeHidden();
 });
 
+test("lists every developer's providers with status; the developer adds and removes their own", async ({ page, server }) => {
+  await page.goto("/");
+  const rows = page.locator("#providers tr");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText("fake");
+  await expect(rows.first()).toContainText("Dev");
+  await expect(rows.first()).toContainText("0 / 0");
+  await expect(rows.first()).toContainText("claude-code");
+  await expect(rows.first()).toContainText("sonnet, opus");
+  await expect(rows.first().locator("a")).toHaveAttribute("href", /\/status$/);
+  await page.fill("#add-provider input[name=name]", "spare");
+  await page.fill("#add-provider input[name=url]", "http://127.0.0.1:1");
+  await page.fill("#add-provider input[name=token]", "s3cret");
+  await page.click("#add-provider button:text-is('Add provider')");
+  const spare = page.locator("#providers tr", { hasText: "spare" });
+  await expect(spare).toContainText("no status yet");
+  expect(await page.locator("#providers-section").textContent()).not.toContain("s3cret");
+  const listed = await server.api("/providers");
+  expect(listed.map(p => [p.name, p.owner])).toEqual([["fake", "dev-principal"], ["spare", "dev-principal"]]);
+  // A duplicate name is refused inline.
+  await page.fill("#add-provider input[name=name]", "spare");
+  await page.fill("#add-provider input[name=url]", "http://127.0.0.1:2");
+  await page.fill("#add-provider input[name=token]", "x");
+  await page.click("#add-provider button:text-is('Add provider')");
+  await expect(page.locator("#providers-section .error")).toContainText("already have a provider");
+  page.once("dialog", d => d.accept());
+  await spare.locator("button:text-is('Remove')").click();
+  await expect(rows).toHaveCount(1);
+});
+
 test("shows a worker in the Workers panel", async ({ page, server }) => {
   const w = await server.api("/workers", { method: "POST", body: { agent: "claude-code" } });
   await page.goto("/");
@@ -285,13 +315,19 @@ test("shows the owner by name, filters by owner, and takes it over from the deta
   await page.selectOption("#owner-filter", "");
   await card(page, owned.id).click();
   await expect(page.locator("#detail .pane p").first()).toContainText("owner: Alice");
-  await expect(page.locator("#detail select[name=owner] option")).toHaveText(["No owner", "Dev", "Alice", "Bob"]);
-  // Spec 3.4: a developer may only make themselves the owner.
-  await page.selectOption("#detail select[name=owner]", "dev-principal");
-  await page.click("#detail button:text-is('Save')");
-  await expect(page.locator("#detail .saved")).toHaveText("Saved");
+  await expect(page.locator("#detail select[name=owner]")).toHaveCount(0);
+  // Spec 3.4: a developer may only make themselves the owner, and the owner may release the ticket.
+  await page.click("#actions button:text-is('Make me owner')");
+  await expect(page.locator("#detail .pane p").first()).toContainText("owner: Dev");
   await expect(card(page, owned.id).locator(".owner")).toHaveText("Dev");
   expect((await server.api(`/tickets/${owned.id}`)).owner).toBe("dev-principal");
+  await page.click("#actions button:text-is('Release ownership')");
+  await expect(page.locator("#detail .pane p").first()).toContainText("owner: none");
+  // Without an owner there is nothing to pick agent and model from; a held ticket offers no ownership action.
+  await expect(page.locator("#detail select[name=agent]")).toBeDisabled();
+  await expect(page.locator("#detail .hint")).toContainText("no owner");
+  await server.api(`/tickets/${owned.id}`, { method: "PATCH", body: { assignee: "w-0a1b2c3d" } });
+  await expect(page.locator("#actions button:text-is('Make me owner')")).toHaveCount(0);
 });
 
 test("without a session the sign-in screen shows and nothing else loads", async ({ page }) => {

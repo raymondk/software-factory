@@ -1,7 +1,8 @@
 import { createContext } from "preact";
 import { useContext } from "preact/hooks";
 
-// { refresh, select, showError, users }, provided by App. `users` are the approved developers, to put names on principals.
+// { refresh, select, showError, users, me }, provided by App. `users` are the approved developers, to put names on
+// principals; `me` is the signed-in user (`admin: true` for the admin token).
 export const Ctx = createContext(null);
 export const useApp = () => useContext(Ctx);
 
