@@ -20,9 +20,6 @@ token = "x"
 heartbeat_timeout = "60s"
 [scheduler]
 max_workers = 4
-[providers.local]
-url = "http://localhost:8081"
-token = "p"
 [agents.command]
 run_timeout = "1s"
 [prompts]
@@ -60,10 +57,12 @@ impl Fixture {
         let pool = db::open(&dir.path().join("test.db")).await.unwrap();
         let mut config = Config::parse(CONFIG).unwrap();
         config.orchestrator.token = TOKEN.into();
-        // As if the scheduler had fetched the provider's status: the command agent with its models.
-        let providers = Providers::new(&config);
+        // One provider, as if the scheduler had fetched its status: the command agent with its models.
+        sqlx::query("INSERT INTO users (principal, status, created_at) VALUES ('owner', 'approved', 'now')").execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO providers (owner, name, url, token, created_at) VALUES ('owner', 'local', 'http://localhost:8081', 'p', 'now')").execute(&pool).await.unwrap();
+        let providers = Providers::new(pool.clone());
         let agents = [("command".to_string(), AgentInfo { models: vec!["m-default".into(), "m-2".into()], default_model: "m-default".into() })].into();
-        providers.statuses.write().unwrap().insert("local".into(), Status { capacity: 4, in_use: 0, agents, workers: vec![] });
+        providers.statuses.write().unwrap().insert(1, Status { capacity: 4, in_use: 0, agents, workers: vec![] });
         tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));
         let router = api::router(AppState { pool, config: Arc::new(config), providers: Arc::new(providers) });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

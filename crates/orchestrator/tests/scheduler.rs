@@ -9,6 +9,8 @@ use orchestrator::provider::{AgentInfo, Providers, ProviderWorker, StartWorker, 
 use orchestrator::{api, config::Config, db, scheduler};
 use sqlx::SqlitePool;
 
+mod common;
+
 const CONFIG: &str = r#"
 [project]
 name = "test"
@@ -19,12 +21,6 @@ token = "x"
 heartbeat_timeout = "60s"
 [scheduler]
 max_workers = 3
-[providers.a]
-url = "unused"
-token = "provider-secret"
-[providers.b]
-url = "unused"
-token = "provider-secret"
 [agents.claude-code]
 run_timeout = "1h"
 [agents.codex]
@@ -107,21 +103,29 @@ struct Setup {
     _dir: tempfile::TempDir,
 }
 
-/// Fake providers named as in `CONFIG` (`a`, `b`); a name absent from `fakes` points at a dead port.
-async fn setup_with(fakes: Vec<(&'static str, Fake)>) -> Setup {
+/// The id of a seeded provider, by name.
+fn id(provider: &str) -> i64 {
+    common::PROVIDERS.iter().position(|p| *p == provider).unwrap() as i64 + 1
+}
+
+/// Fake providers `a` and `b` (`common::PROVIDERS`), token `provider-secret`; a name absent from `fakes` points at a dead port.
+async fn setup_with(mut fakes: Vec<(&'static str, Fake)>) -> Setup {
     let dir = tempfile::tempdir().unwrap();
     let pool = db::open(&dir.path().join("test.db")).await.unwrap();
-    let mut config = Config::parse(CONFIG).unwrap();
+    let config = Config::parse(CONFIG).unwrap();
     let mut shared = BTreeMap::new();
-    for p in config.providers.values_mut() {
-        p.url = "http://127.0.0.1:1".into();
+    for name in common::PROVIDERS {
+        let url = match fakes.iter().position(|(n, _)| *n == name) {
+            Some(i) => {
+                let (url, f) = serve_fake(fakes.remove(i).1).await;
+                shared.insert(name, f);
+                url
+            }
+            None => "http://127.0.0.1:1".into(),
+        };
+        common::provider(&pool, name, &url, "provider-secret").await;
     }
-    for (name, fake) in fakes {
-        let (url, f) = serve_fake(fake).await;
-        config.providers.get_mut(name).unwrap().url = url;
-        shared.insert(name, f);
-    }
-    let providers = Providers::new(&config);
+    let providers = Providers::new(pool.clone());
     Setup { pool, config, providers, fakes: shared, _dir: dir }
 }
 
@@ -145,7 +149,7 @@ impl Setup {
     }
 
     async fn worker_on(&self, provider: &'static str, agent: &str, status: &str, listed: bool) -> String {
-        let w = api::new_worker(&self.pool, &self.config, agent, provider).await.ok().unwrap();
+        let w = api::new_worker(&self.pool, &self.config, agent, id(provider)).await.ok().unwrap();
         sqlx::query("UPDATE workers SET status = ?2 WHERE id = ?1").bind(&w.id).bind(status).execute(&self.pool).await.unwrap();
         if listed {
             self.fake(provider).running.push((w.id.clone(), agent.to_string()));
@@ -154,7 +158,7 @@ impl Setup {
     }
 
     /// (id, agent, provider, status) of every worker record.
-    async fn workers(&self) -> Vec<(String, String, String, String)> {
+    async fn workers(&self) -> Vec<(String, String, i64, String)> {
         sqlx::query_as("SELECT id, agent, provider, status FROM workers ORDER BY id").fetch_all(&self.pool).await.unwrap()
     }
 
@@ -192,7 +196,7 @@ async fn starts_one_worker_per_ticket_up_to_max_workers() {
     s.tick().await.unwrap();
     // Prompts are shared, so the pool runs the first agent the provider advertises.
     let workers = s.workers().await;
-    assert_eq!(workers.iter().filter(|(_, a, p, st)| a == "claude-code" && p == "a" && st == "starting").count(), 3);
+    assert_eq!(workers.iter().filter(|(_, a, p, st)| a == "claude-code" && *p == id("a") && st == "starting").count(), 3);
     let starts = s.fake("a").starts.clone();
     assert_eq!(starts.len(), 3);
     let ids: Vec<&String> = workers.iter().map(|(id, ..)| id).collect();
@@ -309,9 +313,9 @@ async fn routes_to_the_provider_with_most_free_capacity_that_advertises_agent_an
     on_b.sort();
     assert_eq!(on_b, ["claude-code", "codex", "codex"]);
     assert_eq!(s.status_of(&idle).await, "idle");
-    let mut recorded: Vec<(String, String)> = s.workers().await.into_iter().filter(|(.., st)| st == "starting").map(|(_, a, p, _)| (a, p)).collect();
+    let mut recorded: Vec<(String, i64)> = s.workers().await.into_iter().filter(|(.., st)| st == "starting").map(|(_, a, p, _)| (a, p)).collect();
     recorded.sort();
-    assert_eq!(recorded, [("claude-code".into(), "a".into()), ("claude-code".into(), "b".into()), ("codex".into(), "b".into()), ("codex".into(), "b".into())]);
+    assert_eq!(recorded, [("claude-code".into(), id("a")), ("claude-code".into(), id("b")), ("codex".into(), id("b")), ("codex".into(), id("b"))]);
 
     // Nothing else fits: b is full, the gpt ticket has no taker.
     s.tick().await.unwrap();
@@ -324,7 +328,7 @@ async fn unreachable_provider_is_skipped_for_the_pass() {
     ticket(&s.pool, "ready", None).await;
     s.tick().await.unwrap();
     let workers = s.workers().await;
-    assert_eq!((workers.len(), workers[0].2.as_str()), (1, "b"));
+    assert_eq!((workers.len(), workers[0].2), (1, id("b")));
     assert_eq!(s.fake("b").starts.len(), 1);
 }
 

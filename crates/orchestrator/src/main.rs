@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(config.orchestrator.listen).await?;
     eprintln!("orchestrator for {} listening on {}", config.project.name, listener.local_addr()?);
     let config = Arc::new(config);
-    let providers = Arc::new(Providers::new(&config));
+    let providers = Arc::new(Providers::new(pool.clone()));
     tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));
     tokio::spawn(reaper::run_purge(pool.clone(), config.orchestrator.log_retention));
     tokio::spawn(scheduler::run(pool.clone(), config.clone(), providers.clone()));

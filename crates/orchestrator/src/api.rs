@@ -6,12 +6,12 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Extension, Json, Router};
 use sqlx::{Connection, SqliteExecutor};
 
 use crate::config::Config;
-use crate::{users, AppState, STATES};
+use crate::{provider, users, AppState, STATES};
 
 /// Built by build.rs.
 const UI: &str = include_str!("../ui/dist/index.html");
@@ -37,6 +37,8 @@ pub fn router(state: AppState) -> Router {
         .route("/runs/{id}/logs", get(run_logs))
         .route("/metrics", get(metrics))
         .route("/agents", get(agents))
+        .route("/providers", get(provider::list).post(provider::create))
+        .route("/providers/{id}", patch(provider::update).delete(provider::delete))
         .route("/config", get(config))
         .route("/me", get(users::me))
         .route("/users", get(users::list))
@@ -592,7 +594,7 @@ async fn move_ticket(
 struct WorkerRow {
     id: String,
     agent: String,
-    provider: String,
+    provider: i64,
     status: String,
     created_at: String,
     last_heartbeat: Option<String>,
@@ -610,14 +612,13 @@ const WORKER_COLUMNS: &str = "id, agent, provider, status, created_at, last_hear
     (SELECT t.id FROM tickets t WHERE t.assignee = workers.id ORDER BY t.rank ASC, t.id ASC LIMIT 1) AS ticket";
 
 /// Creates a worker record with a fresh id and token, to run `agent` on `provider`. Also used by the scheduler.
-pub async fn new_worker(db: impl SqliteExecutor<'_>, config: &Config, agent: &str, provider: &str) -> Result<NewWorker, ApiError> {
+pub async fn new_worker(db: &sqlx::SqlitePool, config: &Config, agent: &str, provider: i64) -> Result<NewWorker, ApiError> {
     if !config.agents.contains_key(agent) {
         return Err(ApiError::BadRequest("unknown agent"));
     }
-    if !config.providers.contains_key(provider) {
-        return Err(ApiError::BadRequest("unknown provider"));
-    }
-    let (id, agent, provider, token): (String, String, String, String) = sqlx::query_as(&format!(
+    let known: Option<(i64,)> = sqlx::query_as("SELECT id FROM providers WHERE id = ?1").bind(provider).fetch_optional(db).await?;
+    known.ok_or(ApiError::BadRequest("unknown provider"))?;
+    let (id, agent, provider, token): (String, String, i64, String) = sqlx::query_as(&format!(
         "INSERT INTO workers (id, agent, provider, token, status, created_at) \
          VALUES ('w-' || lower(hex(randomblob(4))), ?1, ?2, lower(hex(randomblob(24))), 'starting', {NOW}) \
          RETURNING id, agent, provider, token"
@@ -637,8 +638,14 @@ async fn create_worker(
     if !caller.is_human() {
         return Err(ApiError::Forbidden);
     }
-    // The first configured provider unless the request names one.
-    let provider = req.provider.as_deref().unwrap_or_else(|| state.config.providers.keys().next().unwrap());
+    // The first provider unless the request names one.
+    let provider = match req.provider {
+        Some(p) => p,
+        None => {
+            let (first,): (Option<i64>,) = sqlx::query_as("SELECT MIN(id) FROM providers").fetch_one(&state.pool).await?;
+            first.ok_or(ApiError::BadRequest("no providers"))?
+        }
+    };
     Ok((StatusCode::CREATED, Json(new_worker(&state.pool, &state.config, &req.agent, provider).await?)))
 }
 
@@ -688,10 +695,10 @@ async fn poll(
     let mut conn = state.pool.acquire().await?;
     // IMMEDIATE serializes polls so two workers never pick the same ticket.
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
-    let (agent_name, provider): (String, String) =
+    let (agent_name, provider): (String, i64) =
         sqlx::query_as("SELECT agent, provider FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
     let agent = state.config.agents.get(&agent_name).ok_or(ApiError::BadRequest("unknown agent"))?;
-    let models = serde_json::to_string(&state.providers.models(&provider, &agent_name)).unwrap();
+    let models = serde_json::to_string(&state.providers.models(provider, &agent_name)).unwrap();
     let prompts = &state.config.prompts;
     let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
     let row: Option<Row> = sqlx::query_as(&format!(
@@ -932,6 +939,7 @@ pub enum ApiError {
     Forbidden,
     NotFound,
     BadRequest(&'static str),
+    Conflict(&'static str),
     Db(sqlx::Error),
 }
 
@@ -948,6 +956,7 @@ impl IntoResponse for ApiError {
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.to_string()),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, m.to_string()),
             ApiError::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };
         (status, Json(serde_json::json!({ "error": msg }))).into_response()

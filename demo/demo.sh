@@ -3,6 +3,7 @@
 # DEMO_AGENT=command runs a shell stand-in instead of Claude Code (no tokens needed);
 # DEMO_SLEEP (seconds, default 5) is how long the stand-in "works" before finishing.
 # DEMO_KILL=1 kills the worker container once the ticket is in_progress: the ticket keeps its state and a new worker resumes it.
+# Needs docker, sqlite3 and sha256sum.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 title=${1:?usage: demo.sh "title" ["description"]}
@@ -79,6 +80,16 @@ FACTORY_TOKEN=$(sed -n 's/^token = "\(.*\)"/\1/p' "$tmp/factory.toml" | head -1)
 export FACTORY_TOKEN
 for _ in $(seq 50); do factory ticket list > /dev/null 2>&1 && break; sleep 0.2; done
 factory ticket list > /dev/null
+
+# Providers belong to developers: sign a demo developer in (approved user, personal token straight into the
+# database, as the UI login would) and add the Docker provider as them. The rest of the demo runs as that developer.
+factory user approve demo-principal --name Demo > /dev/null
+demo_token=demo-user-token
+sqlite3 "$tmp/factory.db" "INSERT INTO personal_tokens (token_hash, principal, name, created_at) \
+  VALUES ('$(printf %s "$demo_token" | sha256sum | cut -d' ' -f1)', 'demo-principal', 'demo', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+export FACTORY_TOKEN=$demo_token
+provider_token=$(sed -n 's/^token = "\(.*\)"/\1/p' "$tmp/provider.toml" | head -1)
+factory provider add local http://localhost:8081 "$provider_token" > /dev/null
 
 id=$(factory ticket create --title "$title" --description "$description" | sed -n 's/^  "id": \([0-9]*\),/\1/p')
 factory ticket edit "$id" --state ready > /dev/null

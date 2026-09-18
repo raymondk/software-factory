@@ -28,9 +28,8 @@ async fn config_is_served_without_the_token() {
     assert!(!body.contains(TOKEN), "{body}");
     let c: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(c["orchestrator"]["heartbeat_timeout"], "1m");
-    assert_eq!(c["providers"]["local"]["url"], "http://localhost:8081");
     assert!(c["orchestrator"].get("token").is_none());
-    assert!(c["providers"]["local"].get("token").is_none(), "provider tokens are secrets too");
+    assert!(c.get("providers").is_none(), "providers live in the database");
 }
 
 #[tokio::test]

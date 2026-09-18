@@ -12,8 +12,6 @@ pub struct Config {
     pub project: Project,
     pub orchestrator: Orchestrator,
     pub scheduler: Scheduler,
-    /// Worker providers by name, one or more.
-    pub providers: BTreeMap<String, Provider>,
     pub agents: BTreeMap<String, Agent>,
     /// Prompt template per workable state, shared by all agents.
     pub prompts: BTreeMap<String, String>,
@@ -63,15 +61,6 @@ fn default_log_retention() -> Duration {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Provider {
-    pub url: String,
-    /// Sent as a bearer token when starting and stopping workers. Like `orchestrator.token`, never served.
-    #[serde(skip_serializing)]
-    pub token: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Agent {
     #[serde(with = "humantime_serde")]
     pub run_timeout: Duration,
@@ -96,12 +85,6 @@ impl Config {
         }
         if config.orchestrator.token.is_empty() {
             bail!("orchestrator.token must not be empty");
-        }
-        if config.providers.is_empty() {
-            bail!("providers: at least one provider is required");
-        }
-        if let Some(name) = config.providers.iter().find(|(_, p)| p.token.is_empty()).map(|(n, _)| n) {
-            bail!("providers.{name}.token must not be empty");
         }
         if let Some(state) = config.prompts.keys().find(|s| !crate::STATES.contains(&s.as_str())) {
             bail!("prompts: unknown state {state:?}");
@@ -132,8 +115,6 @@ mod tests {
         assert_eq!(c.scheduler.interval, Duration::from_secs(10));
         assert_eq!(c.log_retention_days(), 7);
         assert_eq!(Config::parse(&EXAMPLE.replace("heartbeat_timeout = \"60s\"", "heartbeat_timeout = \"60s\"\nlog_retention = \"2days\"")).unwrap().log_retention_days(), 2);
-        assert_eq!(c.providers["local"].url, "http://localhost:8081");
-        assert_eq!(c.providers["local"].token, "change-me");
         let c = Config::parse(&EXAMPLE.replace("listen = \"0.0.0.0:8080\"", "listen = \"10.0.0.5:9000\"\npublic_url = \"http://factory:9000\"")).unwrap();
         assert_eq!(c.orchestrator.public_url.as_deref(), Some("http://factory:9000"));
     }
@@ -145,7 +126,5 @@ mod tests {
         assert!(Config::parse(&EXAMPLE.replace("token = \"change-me\"", "token = \"\"")).is_err());
         assert!(Config::parse(&format!("{EXAMPLE}\n[typo]\nx = 1\n")).is_err());
         assert!(Config::parse(&EXAMPLE.replace("in_progress = ", "bogus = ")).is_err());
-        assert!(Config::parse(&EXAMPLE.replace("[providers.local]\nurl = \"http://localhost:8081\"\n", "")).is_err());
-        assert!(Config::parse(&EXAMPLE.replace("token = \"change-me\"   # must match", "token = \"\"   # must match")).is_err());
     }
 }

@@ -1,9 +1,7 @@
 use api_client::{ApproveUser, Client, CreateComment, CreateTicket, CreateToken, CreateWorker, Error};
-use orchestrator::users::hash;
-use sqlx::SqlitePool;
 
 mod common;
-use common::TOKEN;
+use common::{session, OWNER, TOKEN};
 
 async fn serve() -> (String, tempfile::TempDir) {
     common::serve(include_str!("../../../factory.example.toml")).await
@@ -14,23 +12,6 @@ fn status<T: std::fmt::Debug>(r: Result<T, Error>) -> u16 {
         Err(Error::Api { status, .. }) => status,
         other => panic!("expected an API error, got {other:?}"),
     }
-}
-
-/// Signs `principal` in as the login endpoint will: a users row (pending unless already there) and a session valid
-/// for `hours` from now. Returns the session token.
-async fn session(dir: &tempfile::TempDir, principal: &str, hours: i64) -> String {
-    let pool = SqlitePool::connect(&format!("sqlite://{}/test.db", dir.path().display())).await.unwrap();
-    let now = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
-    sqlx::query(&format!("INSERT OR IGNORE INTO users (principal, status, created_at) VALUES (?1, 'pending', {now})")).bind(principal).execute(&pool).await.unwrap();
-    let token = format!("session-{principal}-{hours}");
-    sqlx::query(&format!("INSERT INTO sessions (token_hash, principal, created_at, expires_at) VALUES (?1, ?2, {now}, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?3))"))
-        .bind(hash(&token))
-        .bind(principal)
-        .bind(format!("{hours} hours"))
-        .execute(&pool)
-        .await
-        .unwrap();
-    token
 }
 
 #[tokio::test]
@@ -48,7 +29,7 @@ async fn pending_users_see_only_me_until_approved() {
 
     // Admin sees the pending principal, approves it with a name, and the same session now works.
     let users = admin.list_users().await.unwrap();
-    assert_eq!(users.iter().map(|u| (u.principal.as_str(), u.status.as_str())).collect::<Vec<_>>(), [("bob-principal", "pending")]);
+    assert_eq!(users.iter().map(|u| (u.principal.as_str(), u.status.as_str())).collect::<Vec<_>>(), [(OWNER, "approved"), ("bob-principal", "pending")]);
     assert_eq!(status(admin.approve_user("bob-principal", &ApproveUser { name: "  ".into() }).await), 400);
     let u = admin.approve_user("bob-principal", &ApproveUser { name: "Bob".into() }).await.unwrap();
     assert_eq!((u.name.as_deref(), u.status.as_str()), (Some("Bob"), "approved"));
@@ -77,8 +58,8 @@ async fn admin_preapproves_lists_and_revokes() {
 
     // Users see approved users only; the admin sees everyone. Users may not approve or revoke.
     let names = |us: Vec<api_client::User>| us.into_iter().map(|u| u.principal).collect::<Vec<_>>();
-    assert_eq!(names(alice.list_users().await.unwrap()), ["alice-principal"]);
-    assert_eq!(names(admin.list_users().await.unwrap()), ["alice-principal", "bob-principal"]);
+    assert_eq!(names(alice.list_users().await.unwrap()), [OWNER, "alice-principal"]);
+    assert_eq!(names(admin.list_users().await.unwrap()), [OWNER, "alice-principal", "bob-principal"]);
     assert_eq!(status(alice.approve_user("bob-principal", &ApproveUser { name: "Bob".into() }).await), 403);
     assert_eq!(status(alice.revoke_user("bob-principal").await), 403);
     assert_eq!(status(admin.me().await), 404);
@@ -90,7 +71,7 @@ async fn admin_preapproves_lists_and_revokes() {
     assert_eq!(status(alice.list_tickets(&Default::default()).await), 401);
     assert_eq!(status(cli.list_tickets(&Default::default()).await), 401);
     assert_eq!(status(admin.revoke_user("nobody").await), 404);
-    assert_eq!(admin.list_users().await.unwrap()[0].status, "revoked");
+    assert_eq!(admin.list_users().await.unwrap()[1].status, "revoked");
     // Signing in again lands in revoked, not pending; approving reinstates.
     let again = Client::new(&url, session(&dir, "alice-principal", 1).await);
     assert_eq!(again.me().await.unwrap().status, "revoked");

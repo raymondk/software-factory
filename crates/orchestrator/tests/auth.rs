@@ -44,7 +44,7 @@ async fn ed25519_identity_logs_in_as_a_pending_user_and_logs_out() {
     let me = Client::new(&url, &s.token);
     assert_eq!(me.me().await.unwrap().status, "pending");
     assert_eq!(status(me.list_tickets(&Default::default()).await), 403);
-    assert_eq!(admin.list_users().await.unwrap().iter().map(|u| u.principal.as_str()).collect::<Vec<_>>(), [principal.as_str()]);
+    assert_eq!(admin.list_users().await.unwrap().iter().map(|u| u.principal.as_str()).collect::<Vec<_>>(), [common::OWNER, principal.as_str()]);
 
     // Approval applies to the same session; a second login reports the current status and opens another session.
     admin.approve_user(&principal, &ApproveUser { name: "Ed".into() }).await.unwrap();
@@ -86,5 +86,5 @@ async fn bad_signatures_and_malformed_envelopes_are_rejected() {
     assert_eq!(login(&url, "not-an-envelope".into()).await.unwrap_err(), 400);
     // The challenge survives failed attempts and still works once.
     login(&url, envelope(&identity, &c)).await.unwrap();
-    assert!(Client::new(&url, TOKEN).list_users().await.unwrap().len() == 1);
+    assert!(Client::new(&url, TOKEN).list_users().await.unwrap().len() == 2, "the seeded owner and the identity");
 }

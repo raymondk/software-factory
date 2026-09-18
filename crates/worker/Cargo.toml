@@ -13,6 +13,7 @@ humantime = "2"
 libc = "0.2"
 
 [dev-dependencies]
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 orchestrator = { path = "../orchestrator" }
 axum = "0.8"
 tempfile = "3"

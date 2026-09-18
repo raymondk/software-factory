@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use api_client::{ApproveUser, Breakdown, Client, Comment, CreateComment, CreateRelation, CreateTicket, CreateToken, CreateWorker, ListTickets, LogLine, MoveTicket, ReportUsage, Totals, UpdateTicket};
+use api_client::{ApproveUser, Breakdown, Client, Comment, CreateComment, CreateProvider, CreateRelation, CreateTicket, CreateToken, CreateWorker, ListTickets, LogLine, MoveTicket, ReportUsage, Totals, UpdateTicket};
 use serde::Serialize;
 use clap::{Parser, Subcommand};
 
@@ -41,6 +41,29 @@ enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
+    /// Worker providers: yours to add and remove (user token)
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProviderCommand {
+    /// Add a provider you own; the orchestrator keeps its token to start and stop workers on it
+    Add {
+        name: String,
+        /// Where the orchestrator reaches the provider
+        #[arg(value_name = "URL")]
+        provider_url: String,
+        /// The provider's own token, not yours
+        #[arg(value_name = "TOKEN")]
+        provider_token: String,
+    },
+    /// List every provider with its owner and last status
+    List,
+    /// Remove one of your providers (any, with the admin token); stops its workers
+    Remove { id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -76,9 +99,9 @@ enum WorkerCommand {
     Create {
         #[arg(long)]
         agent: String,
-        /// Provider to record it under (default: the first configured)
+        /// Provider id to record it under (default: the first)
         #[arg(long)]
-        provider: Option<String>,
+        provider: Option<i64>,
     },
     /// List workers
     List,
@@ -337,6 +360,21 @@ async fn main() -> anyhow::Result<()> {
             }
             TokenCommand::Create { name } => print(&client.create_token(&CreateToken { name }).await?),
             TokenCommand::Revoke { id } => client.delete_token(id).await?,
+        },
+        Command::Provider { command } => match command {
+            ProviderCommand::Add { name, provider_url, provider_token } => {
+                print(&client.create_provider(&CreateProvider { name, url: provider_url, token: provider_token }).await?)
+            }
+            ProviderCommand::List => {
+                for p in client.list_providers().await? {
+                    let status = match &p.status {
+                        Some(s) => format!("{}/{}\t{}", s.in_use, s.capacity, s.agents.keys().cloned().collect::<Vec<_>>().join(",")),
+                        None => "-\t-".into(),
+                    };
+                    println!("{}\t{}\t{}\t{}\t{status}", p.id, p.name, p.owner, p.url);
+                }
+            }
+            ProviderCommand::Remove { id } => client.delete_provider(id).await?,
         },
     }
     Ok(())

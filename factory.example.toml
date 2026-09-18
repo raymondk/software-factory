@@ -14,10 +14,6 @@ heartbeat_timeout = "60s"
 max_workers = 4
 # interval = "10s"
 
-[providers.local]
-url = "http://localhost:8081"
-token = "change-me"   # must match the provider's [provider] token
-
 [agents.claude-code]
 run_timeout = "1h"
 

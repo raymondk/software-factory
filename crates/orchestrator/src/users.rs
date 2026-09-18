@@ -99,7 +99,7 @@ pub async fn approve(
     Ok(Json(row.into()))
 }
 
-/// Revokes a user and every session and personal token they hold.
+/// Revokes a user, every session and personal token they hold, and their providers with the providers' workers.
 pub async fn revoke(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(principal): Path<String>) -> Result<Json<User>, ApiError> {
     if !matches!(caller, Caller::Admin) {
         return Err(ApiError::Forbidden);
@@ -114,6 +114,9 @@ pub async fn revoke(State(state): State<AppState>, Extension(caller): Extension<
     sqlx::query("DELETE FROM sessions WHERE principal = ?1").bind(&principal).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM personal_tokens WHERE principal = ?1").bind(&principal).execute(&mut *tx).await?;
     tx.commit().await?;
+    for provider in crate::provider::owned(&state, &principal).await? {
+        crate::provider::remove(&state, provider).await?;
+    }
     Ok(Json(row.into()))
 }
 

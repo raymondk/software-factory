@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -172,9 +173,9 @@ pub struct ListTickets {
 pub struct Worker {
     pub id: String,
     pub agent: String,
-    /// The provider running it, by its name in orchestrator config.
+    /// The provider running it, by id.
     #[serde(default)]
-    pub provider: String,
+    pub provider: i64,
     /// One of: starting, idle, busy, dead
     pub status: String,
     pub created_at: String,
@@ -185,9 +186,9 @@ pub struct Worker {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWorker {
     pub agent: String,
-    /// Defaults to the first configured provider.
+    /// Provider id. Defaults to the first provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
+    pub provider: Option<i64>,
 }
 
 /// Returned once, at creation: the only time the token is visible.
@@ -196,8 +197,58 @@ pub struct NewWorker {
     pub id: String,
     pub agent: String,
     #[serde(default)]
-    pub provider: String,
+    pub provider: i64,
     pub token: String,
+}
+
+/// An agent a provider advertises: the models it supports and the default among them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub models: Vec<String>,
+    pub default_model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderWorker {
+    pub worker_id: String,
+    #[serde(default)]
+    pub agent: String,
+    pub status: String,
+}
+
+/// What a provider reports at `GET /status` (spec 5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    pub capacity: u32,
+    pub in_use: u32,
+    #[serde(default)]
+    pub agents: BTreeMap<String, AgentInfo>,
+    pub workers: Vec<ProviderWorker>,
+}
+
+/// A worker provider as listed: never the token. `status` is the last it returned; null until it answered.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provider {
+    pub id: i64,
+    /// The developer who added it, by principal.
+    pub owner: String,
+    pub name: String,
+    pub url: String,
+    pub created_at: String,
+    pub status: Option<ProviderStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateProvider {
+    pub name: String,
+    pub url: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpdateProvider {
+    pub url: Option<String>,
+    pub token: Option<String>,
 }
 
 /// Poll body. `exclude`: a ticket to hand out only if nothing else is available (the one just timed out on).
@@ -440,6 +491,26 @@ impl Client {
     pub async fn create_worker(&self, req: &CreateWorker) -> Result<NewWorker, Error> {
         let r = self.http.post(format!("{}/workers", self.base)).bearer_auth(&self.token).json(req);
         Self::send(r).await
+    }
+
+    pub async fn list_providers(&self) -> Result<Vec<Provider>, Error> {
+        let r = self.http.get(format!("{}/providers", self.base)).bearer_auth(&self.token);
+        Self::send(r).await
+    }
+
+    pub async fn create_provider(&self, req: &CreateProvider) -> Result<Provider, Error> {
+        let r = self.http.post(format!("{}/providers", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn update_provider(&self, id: i64, req: &UpdateProvider) -> Result<Provider, Error> {
+        let r = self.http.patch(format!("{}/providers/{id}", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn delete_provider(&self, id: i64) -> Result<(), Error> {
+        let r = self.http.delete(format!("{}/providers/{id}", self.base)).bearer_auth(&self.token);
+        Self::check(r).await.map(|_| ())
     }
 
     pub async fn list_workers(&self) -> Result<Vec<Worker>, Error> {

@@ -17,12 +17,6 @@ token = "x"
 heartbeat_timeout = "60s"
 [scheduler]
 max_workers = 4
-[providers.a]
-url = "http://localhost:8081"
-token = "pa"
-[providers.b]
-url = "http://localhost:8082"
-token = "pb"
 [agents.claude-code]
 run_timeout = "1h"
 [agents.codex]
@@ -48,8 +42,8 @@ async fn worker(url: &str, human: &Client, agent: &str) -> (NewWorker, Client) {
     worker_on(url, human, agent, None).await
 }
 
-async fn worker_on(url: &str, human: &Client, agent: &str, provider: Option<&str>) -> (NewWorker, Client) {
-    let w = human.create_worker(&CreateWorker { agent: agent.into(), provider: provider.map(str::to_owned) }).await.unwrap();
+async fn worker_on(url: &str, human: &Client, agent: &str, provider: Option<i64>) -> (NewWorker, Client) {
+    let w = human.create_worker(&CreateWorker { agent: agent.into(), provider }).await.unwrap();
     let client = Client::new(url, &w.token);
     (w, client)
 }
@@ -69,13 +63,13 @@ async fn create_register_heartbeat_list() {
     let (url, _dir) = serve().await;
     let human = Client::new(&url, TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
-    assert_eq!((w.agent.as_str(), w.provider.as_str()), ("claude-code", "a"), "the first configured provider by default");
+    assert_eq!((w.agent.as_str(), w.provider), ("claude-code", 1), "the first provider by default");
     assert!(w.id.len() >= 8 && w.token.len() >= 32);
 
     let listed = human.list_workers().await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!((listed[0].id.as_str(), listed[0].status.as_str(), listed[0].last_heartbeat.as_deref(), listed[0].ticket), (w.id.as_str(), "starting", None, None));
-    assert_eq!((listed[0].agent.as_str(), listed[0].provider.as_str()), ("claude-code", "a"));
+    assert_eq!((listed[0].agent.as_str(), listed[0].provider), ("claude-code", 1));
     // Never the token, in any representation.
     let raw = serde_json::to_string(&listed).unwrap();
     assert!(!raw.contains(&w.token) && !raw.contains("token"));
@@ -91,10 +85,10 @@ async fn create_register_heartbeat_list() {
     assert_eq!(wc.list_workers().await.unwrap()[0].status, "idle");
 
     assert_eq!(status(human.create_worker(&CreateWorker { agent: "nope".into(), provider: None }).await), 400);
-    assert_eq!(status(human.create_worker(&CreateWorker { agent: "claude-code".into(), provider: Some("nope".into()) }).await), 400);
+    assert_eq!(status(human.create_worker(&CreateWorker { agent: "claude-code".into(), provider: Some(99) }).await), 400);
     assert_eq!(status(wc.create_worker(&CreateWorker { agent: "claude-code".into(), provider: None }).await), 403);
-    let (b, _) = worker_on(&url, &human, "codex", Some("b")).await;
-    assert_eq!(b.provider, "b");
+    let (b, _) = worker_on(&url, &human, "codex", Some(2)).await;
+    assert_eq!(b.provider, 2);
 }
 
 #[tokio::test]
@@ -109,8 +103,8 @@ async fn poll_hands_a_model_only_to_a_worker_whose_provider_supports_it() {
     })
     .await;
     let human = Client::new(&url, TOKEN);
-    let (a, ac) = worker_on(&url, &human, "claude-code", Some("a")).await;
-    let (b, bc) = worker_on(&url, &human, "claude-code", Some("b")).await;
+    let (a, ac) = worker_on(&url, &human, "claude-code", Some(1)).await;
+    let (b, bc) = worker_on(&url, &human, "claude-code", Some(2)).await;
     let opus = ticket(&human, "needs opus", "ready").await;
     human.update_ticket(opus, &UpdateTicket { model: Some(Some("opus".into())), ..Default::default() }).await.unwrap();
     let any = ticket(&human, "any model", "ready").await;

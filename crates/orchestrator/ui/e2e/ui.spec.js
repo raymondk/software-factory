@@ -17,7 +17,7 @@ const freePort = () => new Promise(resolve => {
 // What the fake provider advertises: agents and models the UI can set on tickets. Capacity 0, so nothing is ever started.
 const STATUS = { capacity: 0, in_use: 0, workers: [], agents: { "claude-code": { models: ["sonnet", "opus"], default_model: "sonnet" }, codex: { models: ["o3"], default_model: "o3" } } };
 
-// Builds a temp config from factory.example.toml (database defaults to next to it, provider pointed at a fake that only answers /status), starts the orchestrator, kills it after.
+// Builds a temp config from factory.example.toml (database defaults to next to it), starts the orchestrator, registers a fake provider that only answers /status as the developer, kills it all after.
 const test = base.extend({
   server: [async ({}, use) => {
     const port = await freePort();
@@ -28,7 +28,7 @@ const test = base.extend({
     await new Promise(r => provider.listen(0, "127.0.0.1", r));
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ui-tests-"));
     const config = path.join(dir, "factory.toml");
-    fs.writeFileSync(config, fs.readFileSync(path.join(root, "factory.example.toml"), "utf8").replace('listen = "0.0.0.0:8080"', `listen = "127.0.0.1:${port}"`).replace("http://localhost:8081", `http://127.0.0.1:${provider.address().port}`));
+    fs.writeFileSync(config, fs.readFileSync(path.join(root, "factory.example.toml"), "utf8").replace('listen = "0.0.0.0:8080"', `listen = "127.0.0.1:${port}"`).replace('# interval = "10s"', 'interval = "1s"'));
     const proc = spawn(path.join(root, "target/debug/orchestrator"), [config], { stdio: ["ignore", "ignore", "inherit"] });
     // Signs `principal` in the way the login endpoint will, straight into the database: a users row (pending unless
     // already there) and a session. Returns the session token.
@@ -47,13 +47,18 @@ const test = base.extend({
       if (!r.ok) throw new Error(`${opts.method ?? "GET"} ${p}: ${r.status}`);
       return r.json();
     };
-    // Up, and past the scheduler's first pass, which fetches what the provider advertises.
     for (let i = 0; ; i++) {
-      try { await api("/tickets", { method: "POST", body: { title: "probe", agent: "claude-code" } }); break; } catch (e) { if (i > 100) throw new Error("orchestrator did not start: " + e.message); await new Promise(r => setTimeout(r, 100)); }
+      try { await api("/tickets"); break; } catch (e) { if (i > 100) throw new Error("orchestrator did not start: " + e.message); await new Promise(r => setTimeout(r, 100)); }
     }
-    // The developer the browser is signed in as, unless a test says otherwise.
+    // The developer the browser is signed in as, unless a test says otherwise. The fake provider is theirs.
     await api("/users/dev-principal/approve", { method: "POST", body: { name: "Dev" } });
-    await use({ url, api, session, dev: session("dev-principal") });
+    const dev = session("dev-principal");
+    await api("/providers", { method: "POST", token: dev, body: { name: "fake", url: `http://127.0.0.1:${provider.address().port}`, token: "x" } });
+    // Past the scheduler pass that fetches what the provider advertises.
+    for (let i = 0; ; i++) {
+      try { await api("/tickets", { method: "POST", body: { title: "probe", agent: "claude-code" } }); break; } catch (e) { if (i > 100) throw new Error("provider status was never fetched: " + e.message); await new Promise(r => setTimeout(r, 100)); }
+    }
+    await use({ url, api, session, dev });
     proc.kill();
     provider.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -219,17 +224,13 @@ test("opens the configuration read-only from the cog, without the token", async 
   await expect(dialog).toBeHidden();
   await page.click("#settings");
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator(".panel h3")).toHaveText(["Project", "Orchestrator", "Scheduler", "Providers", "Agents", "Prompts"]);
+  await expect(dialog.locator(".panel h3")).toHaveText(["Project", "Orchestrator", "Scheduler", "Agents", "Prompts"]);
   await expect(dialog).toContainText("{{ticket.id}}");
   await expect(dialog).not.toContainText(TOKEN);
   await expect(dialog.locator("input, textarea, select, form")).toHaveCount(0);
   const repo = dialog.locator("a", { hasText: "repo-a" });
   await expect(repo).toHaveAttribute("href", "https://github.com/org/repo-a.git");
   await expect(repo).toHaveAttribute("target", "_blank");
-  const provider = dialog.locator(".panel", { has: page.locator("h3", { hasText: "Providers" }) }).locator("a");
-  await expect(provider).toHaveAttribute("href", /^http:\/\/127\.0\.0\.1:\d+\/status$/);
-  await expect(provider).toHaveAttribute("target", "_blank");
-  await expect(provider).not.toContainText("/status");
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 });
@@ -239,7 +240,7 @@ test("shows a worker in the Workers panel", async ({ page, server }) => {
   await page.goto("/");
   const row = page.locator("#workers tr", { hasText: w.id });
   await expect(row).toContainText("claude-code");
-  await expect(row).toContainText("local");
+  await expect(row).toContainText(String(w.provider));
   await expect(row).toContainText("starting");
 });
 
