@@ -682,8 +682,9 @@ async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<C
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
 }
 
-/// Hands the worker the lowest-ranked unassigned, unblocked ticket in a state that has a prompt, whose `agent` is unset
-/// or the worker's, and whose `model` is unset or one the worker's provider advertises for that agent. 204 when there is none.
+/// Hands the worker the lowest-ranked unassigned, unblocked ticket of its user (the owner of its provider) in a state
+/// that has a prompt, whose `agent` is unset or the worker's, and whose `model` is unset or one the worker's provider
+/// advertises for that agent. Unowned tickets are never handed out. 204 when there is none.
 async fn poll(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -695,15 +696,19 @@ async fn poll(
     let mut conn = state.pool.acquire().await?;
     // IMMEDIATE serializes polls so two workers never pick the same ticket.
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
-    let (agent_name, provider): (String, i64) =
-        sqlx::query_as("SELECT agent, provider FROM workers WHERE id = ?1").bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError::NotFound)?;
+    let (agent_name, provider, owner): (String, i64, String) =
+        sqlx::query_as("SELECT w.agent, w.provider, p.owner FROM workers w JOIN providers p ON p.id = w.provider WHERE w.id = ?1")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(ApiError::NotFound)?;
     let agent = state.config.agents.get(&agent_name).ok_or(ApiError::BadRequest("unknown agent"))?;
     let models = serde_json::to_string(&state.providers.models(provider, &agent_name)).unwrap();
     let prompts = &state.config.prompts;
     let states: Vec<String> = prompts.keys().map(|s| serde_json::to_string(s).unwrap()).collect();
     let row: Option<Row> = sqlx::query_as(&format!(
         "UPDATE tickets SET assignee = ?1, updated_at = {NOW} WHERE id = \
-         (SELECT id FROM tickets WHERE assignee IS NULL AND state IN (SELECT value FROM json_each(?2)) AND NOT {BLOCKED} \
+         (SELECT id FROM tickets WHERE assignee IS NULL AND owner = ?6 AND state IN (SELECT value FROM json_each(?2)) AND NOT {BLOCKED} \
           AND (agent IS NULL OR agent = ?4) AND (model IS NULL OR model IN (SELECT value FROM json_each(?5))) \
           ORDER BY id IS ?3, rank ASC, id ASC LIMIT 1) \
          RETURNING {COLUMNS}"
@@ -713,6 +718,7 @@ async fn poll(
     .bind(exclude)
     .bind(&agent_name)
     .bind(models)
+    .bind(&owner)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {

@@ -173,14 +173,44 @@ async fn ticket(pool: &SqlitePool, state: &str, assignee: Option<&str>) {
 }
 
 async fn pinned(pool: &SqlitePool, state: &str, assignee: Option<&str>, agent: Option<&str>, model: Option<&str>) {
-    sqlx::query("INSERT INTO tickets (title, description, state, rank, assignee, created_at, updated_at, agent, model) VALUES ('t', '', ?1, 1, ?2, 'now', 'now', ?3, ?4)")
+    owned(pool, Some(common::OWNER), state, assignee, agent, model).await
+}
+
+async fn owned(pool: &SqlitePool, owner: Option<&str>, state: &str, assignee: Option<&str>, agent: Option<&str>, model: Option<&str>) {
+    sqlx::query("INSERT INTO tickets (title, description, state, rank, assignee, created_at, updated_at, agent, model, owner) VALUES ('t', '', ?1, 1, ?2, 'now', 'now', ?3, ?4, ?5)")
         .bind(state)
         .bind(assignee)
         .bind(agent)
         .bind(model)
+        .bind(owner)
         .execute(pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn each_owner_is_served_by_their_own_providers_only() {
+    // a is the seeded owner's; b becomes another developer's.
+    let mut s = setup_with(vec![("a", Fake { capacity: 10, agents: both(), ..Default::default() }), ("b", Fake { capacity: 10, agents: both(), ..Default::default() })]).await;
+    s.config.scheduler.max_workers = 10;
+    sqlx::query("INSERT INTO users (principal, status, created_at) VALUES ('other', 'approved', 'now')").execute(&s.pool).await.unwrap();
+    sqlx::query("UPDATE providers SET owner = 'other' WHERE id = ?1").bind(id("b")).execute(&s.pool).await.unwrap();
+    pinned(&s.pool, "ready", None, None, None).await; // the owner's: a
+    owned(&s.pool, Some("other"), "ready", None, Some("codex"), None).await; // other's: b
+    owned(&s.pool, None, "ready", None, None, None).await; // nobody's: never started
+    s.tick().await.unwrap();
+    assert_eq!(s.fake("a").starts.iter().map(|x| x.agent.as_str()).collect::<Vec<_>>(), ["claude-code"]);
+    assert_eq!(s.fake("b").starts.iter().map(|x| x.agent.as_str()).collect::<Vec<_>>(), ["codex"]);
+    assert_eq!(s.workers().await.len(), 2);
+
+    // An idle worker of other's does not count for the owner's pool, and stops although the owner still has work.
+    sqlx::query("UPDATE tickets SET assignee = 'someone' WHERE owner = 'other'").execute(&s.pool).await.unwrap();
+    let idle_b = s.worker_on("b", "claude-code", "idle", true).await;
+    pinned(&s.pool, "ready", None, None, None).await;
+    s.tick().await.unwrap();
+    assert_eq!(s.fake("a").starts.len(), 2);
+    assert_eq!(s.fake("b").stops, vec![idle_b.clone()]);
+    assert_eq!(s.status_of(&idle_b).await, "dead");
 }
 
 #[tokio::test]

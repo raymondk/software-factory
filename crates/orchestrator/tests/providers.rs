@@ -110,7 +110,7 @@ async fn removing_a_provider_stops_its_workers_and_forgets_them() {
         .unwrap()
         .execute_dead(&dead.id)
         .await;
-    let t = admin.create_ticket(&api_client::CreateTicket { title: "t".into(), state: Some("ready".into()), ..Default::default() }).await.unwrap();
+    let t = alice.create_ticket(&api_client::CreateTicket { title: "t".into(), state: Some("ready".into()), ..Default::default() }).await.unwrap();
     let run = wc.poll(&w.id, None).await.unwrap().unwrap().run;
     wc.ship_logs(&w.id, &ShipLogs { run: Some(run), lines: vec!["hi".into()] }).await.unwrap();
     assert_eq!(admin.get_ticket(t.id).await.unwrap().assignee.as_deref(), Some(w.id.as_str()));

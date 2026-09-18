@@ -5,7 +5,7 @@ use orchestrator::reaper;
 use tokio::sync::Barrier;
 
 mod common;
-use common::TOKEN;
+use common::OWNER_TOKEN;
 
 const CONFIG: &str = r#"
 [project]
@@ -61,7 +61,7 @@ fn set_state(state: &str) -> UpdateTicket {
 #[tokio::test]
 async fn create_register_heartbeat_list() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     assert_eq!((w.agent.as_str(), w.provider), ("claude-code", 1), "the first provider by default");
     assert!(w.id.len() >= 8 && w.token.len() >= 32);
@@ -102,7 +102,7 @@ async fn poll_hands_a_model_only_to_a_worker_whose_provider_supports_it() {
         common::status(agents)
     })
     .await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (a, ac) = worker_on(&url, &human, "claude-code", Some(1)).await;
     let (b, bc) = worker_on(&url, &human, "claude-code", Some(2)).await;
     let opus = ticket(&human, "needs opus", "ready").await;
@@ -118,7 +118,7 @@ async fn poll_hands_a_model_only_to_a_worker_whose_provider_supports_it() {
 #[tokio::test]
 async fn worker_token_authenticates_only_itself() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (a, ac) = worker(&url, &human, "claude-code").await;
     let (b, _) = worker(&url, &human, "claude-code").await;
 
@@ -141,7 +141,7 @@ async fn worker_token_authenticates_only_itself() {
 #[tokio::test]
 async fn poll_takes_lowest_ranked_available() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     wc.register(&w.id).await.unwrap();
 
@@ -186,7 +186,7 @@ async fn poll_takes_lowest_ranked_available() {
 #[tokio::test]
 async fn poll_filters_by_agent_and_carries_the_model() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     let (c, cc) = worker(&url, &human, "codex").await;
     let pinned = ticket(&human, "for codex", "ready").await;
@@ -226,7 +226,7 @@ fn lines(run: Option<i64>, lines: &[&str]) -> ShipLogs {
 #[tokio::test]
 async fn poll_opens_a_run_usage_ends_it_and_logs_are_kept_per_worker_and_run() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     let (w2, wc2) = worker(&url, &human, "claude-code").await;
     let t = ticket(&human, "a", "ready").await;
@@ -270,7 +270,7 @@ async fn poll_opens_a_run_usage_ends_it_and_logs_are_kept_per_worker_and_run() {
 #[tokio::test]
 async fn poll_skips_ready_tickets_with_unfinished_dependencies() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, worker) = worker(&url, &human, "claude-code").await;
     let dep = ticket(&human, "dep", "todo").await;
     let t = ticket(&human, "blocked", "ready").await;
@@ -301,7 +301,7 @@ async fn poll_skips_ready_tickets_with_unfinished_dependencies() {
 #[tokio::test]
 async fn poll_exclude_is_last_in_line() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     let first = ticket(&human, "first", "ready").await;
     let second = ticket(&human, "second", "ready").await;
@@ -315,7 +315,7 @@ async fn poll_exclude_is_last_in_line() {
 #[tokio::test]
 async fn concurrent_polls_never_share_a_ticket() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let mut tickets = vec![];
     for i in 0..3 {
         tickets.push(ticket(&human, &format!("t{i}"), "ready").await);
@@ -350,7 +350,7 @@ async fn concurrent_polls_never_share_a_ticket() {
 #[tokio::test]
 async fn acl_workers_modify_only_held_tickets() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     let (other, oc) = worker(&url, &human, "claude-code").await;
     let mine = ticket(&human, "mine", "ready").await;
@@ -392,7 +392,7 @@ async fn acl_workers_modify_only_held_tickets() {
 #[tokio::test]
 async fn state_change_clears_assignee() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     let id = ticket(&human, "a", "ready").await;
     wc.poll(&w.id, None).await.unwrap().unwrap();
@@ -418,7 +418,7 @@ async fn state_change_clears_assignee() {
 #[tokio::test]
 async fn worker_keeps_ticket_it_moves_to_in_progress() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     let (other, oc) = worker(&url, &human, "claude-code").await;
     let id = ticket(&human, "a", "ready").await;
@@ -444,7 +444,7 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     let timeout = std::time::Duration::from_millis(200);
     let (url, dir) = common::serve(&CONFIG.replace("\"60s\"", "\"200ms\"")).await;
     let pool = orchestrator::db::open(&dir.path().join("test.db")).await.unwrap();
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "claude-code").await;
     wc.register(&w.id).await.unwrap();
     let id = ticket(&human, "a", "in_progress").await;
@@ -499,7 +499,7 @@ fn totals(t: &Totals) -> (i64, i64, f64, i64, i64) {
 #[tokio::test]
 async fn usage_is_attributed_and_scoped_to_the_reporting_worker() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let (w, wc) = worker(&url, &human, "codex").await;
     let (other, oc) = worker(&url, &human, "claude-code").await;
     let id = ticket(&human, "a", "ready").await;
@@ -528,7 +528,7 @@ async fn usage_is_attributed_and_scoped_to_the_reporting_worker() {
 #[tokio::test]
 async fn metrics_aggregate_and_count_ticket_states() {
     let (url, _dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     assert_eq!(totals(&human.metrics().await.unwrap().totals), (0, 0, 0.0, 0, 0));
     let (a, ac) = worker(&url, &human, "claude-code").await;
     let (b, bc) = worker(&url, &human, "claude-code").await;
@@ -575,7 +575,7 @@ async fn metrics_aggregate_and_count_ticket_states() {
 async fn old_log_lines_are_purged_runs_are_kept() {
     use std::time::Duration;
     let (url, dir) = serve().await;
-    let human = Client::new(&url, TOKEN);
+    let human = Client::new(&url, OWNER_TOKEN);
     let pool = orchestrator::db::open(&dir.path().join("test.db")).await.unwrap();
     let (w, worker) = worker(&url, &human, "claude-code").await;
     worker.register(&w.id).await.unwrap();

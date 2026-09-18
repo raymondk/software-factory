@@ -55,11 +55,16 @@ impl Fixture {
     async fn new() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let pool = db::open(&dir.path().join("test.db")).await.unwrap();
-        let mut config = Config::parse(CONFIG).unwrap();
-        config.orchestrator.token = TOKEN.into();
+        let config = Config::parse(CONFIG).unwrap();
         // One provider, as if the scheduler had fetched its status: the command agent with its models.
         sqlx::query("INSERT INTO users (principal, status, created_at) VALUES ('owner', 'approved', 'now')").execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO providers (owner, name, url, token, created_at) VALUES ('owner', 'local', 'http://localhost:8081', 'p', 'now')").execute(&pool).await.unwrap();
+        // The tickets are the owner's, so the provider's workers get them.
+        sqlx::query("INSERT INTO personal_tokens (token_hash, principal, name, created_at) VALUES (?1, 'owner', 'cli', 'now')")
+            .bind(orchestrator::users::hash(TOKEN))
+            .execute(&pool)
+            .await
+            .unwrap();
         let providers = Providers::new(pool.clone());
         let agents = [("command".to_string(), AgentInfo { models: vec!["m-default".into(), "m-2".into()], default_model: "m-default".into() })].into();
         providers.statuses.write().unwrap().insert(1, Status { capacity: 4, in_use: 0, agents, workers: vec![] });

@@ -9,8 +9,9 @@ use orchestrator::{api, config::Config, db, reaper, AppState};
 use sqlx::SqlitePool;
 
 pub const TOKEN: &str = "secret";
-/// The approved developer who owns the seeded providers.
+/// The approved developer who owns the seeded providers, and a personal token of theirs.
 pub const OWNER: &str = "owner-principal";
+pub const OWNER_TOKEN: &str = "owner-token";
 /// Names of the seeded providers; their ids are 1 and 2, in this order.
 pub const PROVIDERS: [&str; 2] = ["a", "b"];
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
@@ -44,6 +45,12 @@ pub async fn serve_with(config: &str, seed: impl Fn(&str) -> Status) -> (String,
         let id = provider(&pool, name, &format!("http://localhost:808{}", i + 1), "p").await;
         providers.statuses.write().unwrap().insert(id, seed(name));
     }
+    sqlx::query(&format!("INSERT INTO personal_tokens (token_hash, principal, name, created_at) VALUES (?1, ?2, 'cli', {NOW})"))
+        .bind(hash(OWNER_TOKEN))
+        .bind(OWNER)
+        .execute(&pool)
+        .await
+        .unwrap();
     tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));
     let router = api::router(AppState { pool, config: Arc::new(config), providers: Arc::new(providers) });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -54,9 +61,14 @@ pub async fn serve_with(config: &str, seed: impl Fn(&str) -> Status) -> (String,
 
 /// A provider row owned by `OWNER` (created approved if missing, so it is the first user listed). Returns its id.
 pub async fn provider(pool: &SqlitePool, name: &str, url: &str, token: &str) -> i64 {
-    sqlx::query(&format!("INSERT OR IGNORE INTO users (principal, name, status, created_at) VALUES (?1, 'Owner', 'approved', {NOW})")).bind(OWNER).execute(pool).await.unwrap();
+    provider_of(pool, OWNER, name, url, token).await
+}
+
+/// A provider row owned by `owner`, an approved user (created if missing). Returns its id.
+pub async fn provider_of(pool: &SqlitePool, owner: &str, name: &str, url: &str, token: &str) -> i64 {
+    sqlx::query(&format!("INSERT OR IGNORE INTO users (principal, name, status, created_at) VALUES (?1, ?1, 'approved', {NOW})")).bind(owner).execute(pool).await.unwrap();
     let (id,): (i64,) = sqlx::query_as(&format!("INSERT INTO providers (owner, name, url, token, created_at) VALUES (?1, ?2, ?3, ?4, {NOW}) RETURNING id"))
-        .bind(OWNER)
+        .bind(owner)
         .bind(name)
         .bind(url)
         .bind(token)

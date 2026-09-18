@@ -170,8 +170,8 @@ test("relates tickets and marks the blocked one", async ({ page, server }) => {
 });
 
 test("shows a run's log live and a worker's whole log", async ({ page, server }) => {
-  await server.api("/tickets", { method: "POST", body: { title: "Logged", state: "ready" } });
-  const w = await server.api("/workers", { method: "POST", body: { agent: "claude-code" } });
+  await server.api("/tickets", { method: "POST", token: server.dev, body: { title: "Logged", state: "ready" } });
+  const w = await server.api("/workers", { method: "POST", body: { agent: "claude-code" } }); // on the developer's provider
   const asWorker = async (p, body) => {
     const r = await fetch(server.url + p, { method: "POST", headers: { Authorization: "Bearer " + w.token, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return r.status === 204 ? null : r.json();

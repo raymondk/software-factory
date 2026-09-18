@@ -148,7 +148,9 @@ async fn owner_is_the_creating_developer_filterable_and_editable() {
     assert_eq!(ids(admin.list_tickets(&by_owner("nobody")).await.unwrap()), Vec::<i64>::new());
 
     // A worker holding alice's ticket creates one: it belongs to alice too. A worker holding nothing sets no owner.
-    let w = admin.create_worker(&CreateWorker { agent: "claude-code".into(), provider: None }).await.unwrap();
+    // Only alice's own worker (one on her provider) is handed her ticket.
+    let p = alice.create_provider(&api_client::CreateProvider { name: "mine".into(), url: "http://localhost:9000".into(), token: "pt".into() }).await.unwrap();
+    let w = admin.create_worker(&CreateWorker { agent: "claude-code".into(), provider: Some(p.id) }).await.unwrap();
     let worker = Client::new(&url, &w.token);
     worker.register(&w.id).await.unwrap();
     let idle = worker.create_ticket(&CreateTicket { title: "from an idle worker".into(), ..Default::default() }).await.unwrap();
