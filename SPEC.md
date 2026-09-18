@@ -9,7 +9,7 @@ Software Factory takes tickets from a team of developers and has agents carry th
 It is made of three components:
 
 - **Orchestrator**: owns tickets, exposes a REST API, web UI, and CLI, and decides when workers are needed.
-- **Worker Provider**: a separate process that starts and stops workers somewhere (Docker, Kubernetes, VMs) and holds the credentials they need. An orchestrator may use several, typically one per agent account.
+- **Worker Provider**: a separate process that starts and stops workers somewhere (Docker, Kubernetes, VMs) and holds the credentials they need. A developer adds one through the UI or CLI; it belongs to them, and its workers act as them and work only their tickets.
 - **Worker**: a runtime around an agent. Pulls tickets from the orchestrator, does the work, reports back.
 
 One orchestrator serves one project. A project may span several repositories.
@@ -29,6 +29,7 @@ Web UI / CLI ──▶ Orchestrator REST API ◀── Worker (polls for tickets
 - **Assignee**: who currently holds the ticket. A worker or a human. Acts as the lease.
 - **Agent**: the program doing the work (Claude Code, Codex, ...). Every worker runs one agent. Providers advertise the agents they can run; the image behind an agent is the provider's business.
 - **Model**: the model an agent runs with. Each provider advertises the models it supports per agent and a default; a ticket may pick one.
+- **Owner**: the developer a ticket belongs to. Only their workers pick it up. Nobody works an unowned ticket.
 - **Workable state**: a ticket state that has a prompt. Prompts are shared by all agents. Other states are human-only.
 
 ## 3. Ticket model
@@ -64,6 +65,7 @@ Transitions are not restricted by the orchestrator beyond the ACL. Prompts tell 
 - A ticket may be modified by its assignee, the orchestrator, or a human.
 - Any worker may create tickets.
 - Any worker or human may comment on any ticket.
+- Owner: a caller may set it to their own principal, and the current owner may clear it. Nobody can make someone else the owner. A worker's principal is its user's (5). Refused while the ticket has an assignee.
 
 ### 3.5 Comments
 
@@ -74,12 +76,12 @@ Transitions are not restricted by the orchestrator beyond the ACL. Prompts tell 
 ### 3.6 Fields
 
 - `id`, `title`, `description`, `state`, `rank`, `assignee`, `created_at`, `updated_at`
-- `owner`: the developer who created the ticket, by principal; null when the admin did, and passed on from the ticket a worker holds when the worker did. Informational, editable, no permission depends on it.
+- `owner`: a developer, by principal. On create: the creating developer, a worker's user, none for the admin. Only the owner's workers pick the ticket up; an unowned one is never handed out. Changing it: 3.4.
 - `links`: list of URLs such as pull requests, added by workers
 - `comments`
 - `relations`: see 3.7
 - `blocked`: a `ready` ticket with an unfinished dependency
-- `agent`, `model`: optional. `agent` restricts which workers may pick the ticket up; unset means any. `model` overrides the provider's default for that agent. Both must be advertised by some provider (5).
+- `agent`, `model`: optional. `agent` restricts which workers may pick the ticket up; unset means any. `model` overrides the provider's default for that agent. Both must be advertised by one of the owner's providers (5); an unowned ticket accepts neither.
 - `runs`: agent runs on the ticket, newest first (4.7)
 
 ### 3.7 Relations
@@ -113,7 +115,7 @@ Tickets:
 - `GET /tickets` with optional `state`, `assignee` and `owner` filters, ordered by rank
 - `POST /tickets`
 - `GET /tickets/{id}`
-- `PATCH /tickets/{id}`: title, description, state, assignee, owner, links, agent, model. Subject to ACL. `agent` and `model` are rejected unless some provider advertised them in its last status.
+- `PATCH /tickets/{id}`: title, description, state, assignee, owner, links, agent, model. Subject to ACL; `owner` per 3.4. `agent` and `model` are rejected unless one of the owner's providers advertised them in its last status.
 - `POST /tickets/{id}/move`: body `{ before: id }` or `{ after: id }`. Reorders the ticket.
 - `GET /tickets/{id}/comments`
 - `POST /tickets/{id}/comments`
@@ -124,14 +126,20 @@ Tickets:
 Workers:
 - `POST /workers/{id}/register`: worker confirms it is alive. The id and token were assigned by the orchestrator before start.
 - `POST /workers/{id}/heartbeat`
-- `POST /workers/{id}/poll`: returns the lowest-ranked available, unblocked ticket whose `agent` is unset or matches this worker's, and whose `model` is unset or supported by this worker's provider, with the prompt for its current state, the ticket's `model` (may be null), the project's repos, and the id of the run it opens, or nothing. Sets assignee atomically. An optional body `{"exclude": <ticket id>}` (the ticket the worker just timed out on) makes that ticket last in line: it is returned only when nothing else is available.
+- `POST /workers/{id}/poll`: returns the lowest-ranked available, unblocked ticket owned by this worker's user whose `agent` is unset or matches this worker's, and whose `model` is unset or supported by this worker's provider, with the prompt for its current state, the ticket's `model` (may be null), the project's repos, and the id of the run it opens, or nothing. Sets assignee atomically. An optional body `{"exclude": <ticket id>}` (the ticket the worker just timed out on) makes that ticket last in line: it is returned only when nothing else is available.
 - `POST /workers/{id}/usage`: report token and cost usage for a ticket, and the model the agent ran with. Ends the worker's open run and records the model on it.
 - `POST /workers/{id}/logs`: body `{ run, lines }`; `run` is one of the worker's runs or null.
 - `GET /workers/{id}/logs?after=<line id>`: the worker's whole stream, oldest first, at most 1000 lines per call.
 - `GET /runs/{id}/logs?after=<line id>`: one run's lines, same shape. `after` supports polling for live output.
 - `GET /workers`: list workers with their agent, provider and status.
 - `GET /config`: the running configuration, read-only, without the token. Shown in the UI.
-- `GET /agents`: the agents some provider advertised in its last status, each with the union of the models advertised for it. What the UI offers when setting agent and model on a ticket.
+- `GET /agents`: the agents the caller's providers advertised in their last status (a worker's: its user's), each with the union of the models advertised for it. What the UI offers when setting agent and model on a ticket.
+
+Providers (5):
+- `GET /providers`: every provider with id, owner, name, url and last status. Never the token.
+- `POST /providers` body `{ name, url, token }`: adds a provider owned by the calling developer; `name` is unique per owner. Not for the admin or workers.
+- `PATCH /providers/{id}`: url, token. Owner only.
+- `DELETE /providers/{id}`: owner or admin. Stops the provider's workers.
 
 Login (no token): developers sign in with Internet Identity. The browser obtains a delegation chain from `https://id.ai/authorize`; the orchestrator verifies the IC-Auth envelope off-chain against the IC mainnet root key (`ic_auth_verifier`) and mints its own session token. The principal derives from the origin the UI is served from (`orchestrator.public_url`): changing that origin changes every user's principal.
 - `GET /auth/challenge` → `{ challenge }`: a one-time nonce, five minutes, kept in memory.
@@ -141,7 +149,7 @@ Login (no token): developers sign in with Internet Identity. The browser obtains
 Users:
 - `GET /me`: the calling developer with their `status`.
 - `GET /users`: every user for the admin, approved ones for everyone else.
-- `POST /users/{principal}/approve` body `{ name }`, `POST /users/{principal}/revoke`: admin only. Revoking deletes the user's sessions and personal tokens.
+- `POST /users/{principal}/approve` body `{ name }`, `POST /users/{principal}/revoke`: admin only. Revoking deletes the user's sessions, personal tokens and providers, and stops the providers' workers.
 - `GET /tokens`, `POST /tokens` body `{ name }`, `DELETE /tokens/{id}`: a developer's personal tokens for the CLI. The token is returned once, at creation.
 
 Metrics:
@@ -150,11 +158,11 @@ Metrics:
 ### 4.3 Scheduler
 
 Periodic loop:
-1. Fetch `/status` from every provider: capacity, workers, advertised agents. A provider that does not answer is skipped this pass.
-2. Count available tickets per agent and model: unassigned, in a workable state, not blocked (3.7). Tickets with no `agent` form a shared pool that any idle worker drains.
-3. Count idle and busy workers per agent, and which models each can serve from its provider's status.
-4. For each worker needed, create a worker record with an id, token, agent and provider, then ask that provider to start it. The provider is the one with the most free capacity among those advertising the agent and, when the ticket sets one, the model. For the shared pool, when no worker is idle, start on the provider with the most free capacity using the first agent it advertises. Start until each agent has one worker per available ticket, capped by `max_workers` and by each provider's remaining capacity.
-5. When an agent has no available tickets and the shared pool is empty, ask the providers to stop its idle workers.
+1. Load the providers from the database and fetch `/status` from each: capacity, workers, advertised agents. A provider that does not answer is skipped this pass.
+2. Count available tickets per owner, agent and model: owned, unassigned, in a workable state, not blocked (3.7). Tickets with no `agent` form, per owner, a shared pool that any of that owner's idle workers drains.
+3. Count idle and busy workers per owner and agent, and which models each can serve from its provider's status.
+4. For each worker needed, create a worker record with an id, token, agent and provider, then ask that provider to start it. The provider is the one among the owner's with the most free capacity among those advertising the agent and, when the ticket sets one, the model. For an owner's shared pool, when none of their workers is idle, start on their provider with the most free capacity using the first agent it advertises. Start until each owner's agent has one worker per available ticket, capped by `max_workers` and by each provider's remaining capacity.
+5. When an owner's agent has no available tickets and their shared pool is empty, ask the providers to stop its idle workers.
 
 Later: worker affinity.
 
@@ -166,13 +174,13 @@ There is no retry cap. A ticket that keeps killing workers is caught by humans w
 
 ### 4.5 Web UI
 
-Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments, relations and runs, allows creating, editing, relating, reordering tickets, setting agent and model, and changing state, shows workers with their agent and provider, and metrics. A cog at the top right opens the running configuration read-only in a modal. A run's log opens from the ticket at `#/tickets/{id}/runs/{run}` and a worker's at `#/workers/{id}`, both following live while open. When the UI knows the agent behind a run or a worker (Claude Code today), its log opens in a pretty view that renders every event as structure, with a toggle to the raw lines; lines that are not events, such as the worker's own output, stay raw in place. The mapping from agent to renderer lives in the UI.
+Static HTML and JavaScript embedded in the orchestrator binary. Lists tickets in rank order with blocked ones marked, shows one ticket with comments, relations and runs, allows creating, editing, relating, reordering tickets, setting agent and model, and changing state, shows workers with their agent and provider, and metrics. A ticket's page lets the signed-in developer make themselves its owner unless a worker holds it. A Providers view lists every developer's providers with owner, URL and last status; a developer adds their own with a URL and token, and removes them. A cog at the top right opens the running configuration read-only in a modal. A run's log opens from the ticket at `#/tickets/{id}/runs/{run}` and a worker's at `#/workers/{id}`, both following live while open. When the UI knows the agent behind a run or a worker (Claude Code today), its log opens in a pretty view that renders every event as structure, with a toggle to the raw lines; lines that are not events, such as the worker's own output, stay raw in place. The mapping from agent to renderer lives in the UI.
 
 Auth: the page carries no token. A developer signs in with Internet Identity (4.2, Login); the UI keeps the session token in `localStorage` and sends it as a bearer header, and a 401 sends it back to the sign-in screen. A pending or revoked user sees a page with their principal and the `factory user approve` command, polling until approved. The header shows the user, a Tokens modal (personal tokens for the CLI, each shown once at creation, revocable) and logout.
 
 ### 4.6 CLI
 
-`factory` command that wraps the REST API with the same capabilities as the UI. Configured with the orchestrator URL and a token via environment. Intended to be run by an agent, both inside a worker and by a developer working with an agent locally. `factory ticket logs <id> [--run <n>] [-f]` and `factory worker logs <id> [-f]` print logs, `-f` following until the run ends or the worker dies.
+`factory` command that wraps the REST API with the same capabilities as the UI. Configured with the orchestrator URL and a token via environment. Intended to be run by an agent, both inside a worker and by a developer working with an agent locally. `factory ticket logs <id> [--run <n>] [-f]` and `factory worker logs <id> [-f]` print logs, `-f` following until the run ends or the worker dies. `factory provider add <name> <url> <token>`, `factory provider list` and `factory provider remove <id>` manage the caller's providers.
 
 ### 4.7 Runs and logs
 
@@ -184,11 +192,11 @@ Retention: `orchestrator.log_retention` (default 7 days). Hourly, the orchestrat
 
 ## 5. Worker Provider
 
-A separate process. The orchestrator connects to each configured provider at its URL. A provider holds one set of credentials, so one provider is one account; it runs where the workers run, so the orchestrator never sees credentials and can be hosted anywhere.
+A separate process. A developer adds it to the orchestrator with its URL and token (4.2, Providers); the orchestrator stores both. A provider belongs to the developer who added it: its workers act as that developer and work only their tickets. A provider holds one set of agent credentials, so one provider is one account; it runs where the workers run, so the orchestrator never sees those credentials and can be hosted anywhere.
 
 A provider is configured with the agents it can run: for each, an image, the models it supports and the default among them. It advertises agents and models in `/status`; the orchestrator validates tickets and routes work against the union of what providers advertise. To pin work to an account, give that account's provider an agent name no other provider advertises.
 
-REST API the orchestrator calls. `POST` and `DELETE` require the provider's token as a bearer header; the orchestrator holds it as `providers.<name>.token`. `GET /status` is open.
+REST API the orchestrator calls. `POST` and `DELETE` require the provider's token as a bearer header; the orchestrator holds it from when the provider was added. `GET /status` is open.
 
 - `POST /workers`: body `{ worker_id, agent, orchestrator_url, worker_token }`. Starts a worker of that agent; 400 for an agent the provider does not advertise. The provider maps `worker_id` to its own handle (container id, pod name) internally.
 - `DELETE /workers/{id}`: stops a worker.
@@ -253,14 +261,6 @@ heartbeat_timeout = "60s"
 [scheduler]
 max_workers = 4
 
-[providers.local]
-url = "http://localhost:8081"
-token = "change-me"   # must match that provider's [provider] token
-
-[providers.team-b]
-url = "http://team-b:8081"
-token = "change-me-too"
-
 [agents.claude-code]
 run_timeout = "1h"
 
@@ -278,7 +278,7 @@ check for an existing branch or pull request, and continue from there.
 """
 ```
 
-The `prompts` table maps states to prompt templates, shared by all agents. Workers only pick up tickets in states that have a prompt. An agent a provider advertises but `agents` does not list is never scheduled.
+Providers are not configured here; developers add them at runtime (4.2). The `prompts` table maps states to prompt templates, shared by all agents. Workers only pick up tickets in states that have a prompt. An agent a provider advertises but `agents` does not list is never scheduled.
 
 Each provider has its own config file. The Docker provider's:
 
