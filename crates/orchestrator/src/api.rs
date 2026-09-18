@@ -489,12 +489,15 @@ async fn remove_relation(
     Ok(Json(full_ticket(&state, id).await?))
 }
 
-/// Spec 3.4: a ticket may be modified by a human or by the worker holding it.
+/// Spec 3.4: a ticket may be modified by a human or by the worker holding it. A refused worker is told so: a state
+/// change releases the ticket, so this is what an agent hits when it edits a ticket it just moved.
 async fn authorize(caller: &Caller, db: impl SqliteExecutor<'_>, id: i64) -> Result<(), ApiError> {
     let row: Option<(Option<String>,)> = sqlx::query_as("SELECT assignee FROM tickets WHERE id = ?1").bind(id).fetch_optional(db).await?;
     let (assignee,) = row.ok_or(ApiError::NotFound)?;
     match caller {
-        Caller::Worker(w) if assignee.as_deref() != Some(w) => Err(ApiError::Forbidden),
+        Caller::Worker(w) if assignee.as_deref() != Some(w) => {
+            Err(ApiError::NotHolder(format!("forbidden: worker {w} does not hold ticket {id} (assignee: {})", assignee.as_deref().unwrap_or("none"))))
+        }
         _ => Ok(()),
     }
 }
@@ -976,6 +979,8 @@ async fn metrics(State(state): State<AppState>) -> Result<Json<Metrics>, ApiErro
 pub enum ApiError {
     Unauthorized,
     Forbidden,
+    /// 403 with the reason: the worker is not the ticket's assignee.
+    NotHolder(String),
     NotFound,
     BadRequest(&'static str),
     Conflict(&'static str),
@@ -993,6 +998,7 @@ impl IntoResponse for ApiError {
         let (status, msg) = match self {
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
+            ApiError::NotHolder(m) => (StatusCode::FORBIDDEN, m),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.to_string()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m.to_string()),

@@ -364,6 +364,13 @@ async fn acl_workers_modify_only_held_tickets() {
     }
     assert_eq!(status(oc.update_ticket(mine, &set_state("done")).await), 403);
     assert_eq!(status(oc.move_ticket(mine, &MoveTicket { after: Some(theirs), ..Default::default() }).await), 403);
+    // The refusal says who holds the ticket, so an agent does not go looking for a permission bug.
+    let reason = |r: Result<api_client::Ticket, Error>| match r {
+        Err(Error::Api { status: 403, body }) => body,
+        other => panic!("expected 403, got {other:?}"),
+    };
+    assert!(reason(oc.update_ticket(mine, &set_state("done")).await).contains(&format!("worker {} does not hold ticket {mine} (assignee: {})", other.id, w.id)));
+    assert!(reason(wc.update_ticket(theirs, &set_state("done")).await).contains(&format!("worker {} does not hold ticket {theirs} (assignee: none)", w.id)));
     let t = human.get_ticket(theirs).await.unwrap();
     assert_eq!((t.title.as_str(), t.rank), ("theirs", 2.0));
     assert_eq!(human.get_ticket(mine).await.unwrap().state, "ready");

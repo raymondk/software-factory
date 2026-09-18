@@ -13,7 +13,7 @@ Your ticket id is `$FACTORY_TICKET`. `factory` is pre-configured (`FACTORY_URL`,
    The Bash cwd persists between calls. Run `pwd` before `cd`; a `cd <name>` from inside the clone fails. Prefer absolute paths.
 4. Work on a branch, push it, open a PR: `gh pr create --title "..." --body "..."`
 5. Record the PR: `factory ticket edit $FACTORY_TICKET --add-link <pr-url>`
-6. Finish: `factory ticket edit $FACTORY_TICKET --state in_review`
+6. Finish, last: `factory ticket edit $FACTORY_TICKET --state in_review`. A state change releases the ticket: after it you no longer hold it, and further edits are refused with `403 … does not hold ticket`. Make every comment and link before the final state change.
 
 Other commands:
 
