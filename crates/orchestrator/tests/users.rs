@@ -147,23 +147,34 @@ async fn owner_is_the_creating_developer_filterable_and_editable() {
     assert_eq!(ids(bob.list_tickets(&by_owner("alice-principal")).await.unwrap()), [a.id]);
     assert_eq!(ids(admin.list_tickets(&by_owner("nobody")).await.unwrap()), Vec::<i64>::new());
 
-    // A worker holding alice's ticket creates one: it belongs to alice too. A worker holding nothing sets no owner.
-    // Only alice's own worker (one on her provider) is handed her ticket.
+    // A worker's tickets belong to its user, the owner of its provider, whether or not it holds one; only it is
+    // handed alice's ticket.
     let p = alice.create_provider(&api_client::CreateProvider { name: "mine".into(), url: "http://localhost:9000".into(), token: "pt".into() }).await.unwrap();
     let w = admin.create_worker(&CreateWorker { agent: "claude-code".into(), provider: Some(p.id) }).await.unwrap();
     let worker = Client::new(&url, &w.token);
     worker.register(&w.id).await.unwrap();
     let idle = worker.create_ticket(&CreateTicket { title: "from an idle worker".into(), ..Default::default() }).await.unwrap();
-    assert_eq!(idle.owner, None);
+    assert_eq!(idle.owner.as_deref(), Some("alice-principal"));
     assert_eq!(worker.poll(&w.id, None).await.unwrap().unwrap().ticket.id, a.id);
     let spawned = worker.create_ticket(&CreateTicket { title: "follow-up".into(), ..Default::default() }).await.unwrap();
     assert_eq!(spawned.owner.as_deref(), Some("alice-principal"));
 
-    // Anyone may reassign or clear the owner; an omitted field is untouched.
-    let t = bob.update_ticket(a.id, &api_client::UpdateTicket { owner: Some(Some("bob-principal".into())), ..Default::default() }).await.unwrap();
-    assert_eq!(t.owner.as_deref(), Some("bob-principal"));
+    // Spec 3.4: while a worker holds the ticket nobody changes the owner, not even alice.
+    let claim = |o: Option<&str>| api_client::UpdateTicket { owner: Some(o.map(str::to_owned)), ..Default::default() };
+    assert_eq!(status(alice.update_ticket(a.id, &claim(None)).await), 409);
+    assert_eq!(status(bob.update_ticket(a.id, &claim(Some("bob-principal"))).await), 409);
+    assert_eq!(status(worker.update_ticket(a.id, &claim(Some("alice-principal"))).await), 409);
+    // Released: a caller makes only themselves the owner, only the owner clears it, the admin does neither.
+    alice.update_ticket(a.id, &api_client::UpdateTicket { assignee: Some(None), ..Default::default() }).await.unwrap();
+    assert_eq!(status(alice.update_ticket(a.id, &claim(Some("bob-principal"))).await), 403);
+    assert_eq!(status(admin.update_ticket(a.id, &claim(Some("alice-principal"))).await), 403);
+    assert_eq!(status(bob.update_ticket(a.id, &claim(None)).await), 403);
+    assert_eq!(bob.update_ticket(a.id, &claim(Some("bob-principal"))).await.unwrap().owner.as_deref(), Some("bob-principal"));
+    assert_eq!(status(alice.update_ticket(a.id, &claim(None)).await), 403);
+    assert_eq!(status(admin.update_ticket(a.id, &claim(None)).await), 403);
+    // An omitted field is untouched; the owner clears it; the unowned ticket is anyone's to claim.
     let t = bob.update_ticket(a.id, &api_client::UpdateTicket { title: Some("renamed".into()), ..Default::default() }).await.unwrap();
     assert_eq!(t.owner.as_deref(), Some("bob-principal"));
-    let t = admin.update_ticket(a.id, &api_client::UpdateTicket { owner: Some(None), ..Default::default() }).await.unwrap();
-    assert_eq!(t.owner, None);
+    assert_eq!(bob.update_ticket(a.id, &claim(None)).await.unwrap().owner, None);
+    assert_eq!(alice.update_ticket(none.id, &claim(Some("alice-principal"))).await.unwrap().owner.as_deref(), Some("alice-principal"));
 }

@@ -88,18 +88,27 @@ impl Providers {
         Ok((clients, fresh))
     }
 
-    /// Whether some provider's last status advertised `agent` (any agent when `None`) supporting `model` (any when `None`).
-    pub fn advertised(&self, agent: Option<&str>, model: Option<&str>) -> bool {
-        self.statuses.read().unwrap().values().any(|s| {
+    /// The ids of `owner`'s providers.
+    pub async fn owned_ids(&self, owner: &str) -> sqlx::Result<Vec<i64>> {
+        let rows: Vec<(i64,)> = sqlx::query_as("SELECT id FROM providers WHERE owner = ?1 ORDER BY id").bind(owner).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Whether the last status of one of `providers` advertised `agent` (any agent when `None`) supporting `model`
+    /// (any when `None`).
+    pub fn advertised(&self, providers: &[i64], agent: Option<&str>, model: Option<&str>) -> bool {
+        let statuses = self.statuses.read().unwrap();
+        providers.iter().filter_map(|id| statuses.get(id)).any(|s| {
             s.agents.iter().any(|(name, info)| agent.is_none_or(|a| a == name) && model.is_none_or(|m| info.models.contains(&m.to_string())))
         })
     }
 
-    /// Every agent some provider's last status advertised, with the models advertised for it (in advertised order,
-    /// so a default comes first).
-    pub fn agents(&self) -> BTreeMap<String, Vec<String>> {
+    /// Every agent the last status of one of `providers` advertised, with the models advertised for it (in advertised
+    /// order, so a default comes first).
+    pub fn agents(&self, providers: &[i64]) -> BTreeMap<String, Vec<String>> {
         let mut agents: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for s in self.statuses.read().unwrap().values() {
+        let statuses = self.statuses.read().unwrap();
+        for s in providers.iter().filter_map(|id| statuses.get(id)) {
             for (name, info) in &s.agents {
                 let models = agents.entry(name.clone()).or_default();
                 for m in &info.models {

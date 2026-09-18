@@ -34,6 +34,7 @@ const test = base.extend({
     // already there) and a session. Returns the session token.
     const session = principal => {
       const db = new DatabaseSync(path.join(dir, "factory.db"));
+      db.exec("PRAGMA busy_timeout = 5000"); // the orchestrator writes too
       const token = `session-${principal}-${Date.now()}`;
       db.prepare("INSERT OR IGNORE INTO users (principal, status, created_at) VALUES (?, 'pending', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))").run(principal);
       db.prepare("INSERT INTO sessions (token_hash, principal, created_at, expires_at) VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+8 hours'))")
@@ -56,7 +57,7 @@ const test = base.extend({
     await api("/providers", { method: "POST", token: dev, body: { name: "fake", url: `http://127.0.0.1:${provider.address().port}`, token: "x" } });
     // Past the scheduler pass that fetches what the provider advertises.
     for (let i = 0; ; i++) {
-      try { await api("/tickets", { method: "POST", body: { title: "probe", agent: "claude-code" } }); break; } catch (e) { if (i > 100) throw new Error("provider status was never fetched: " + e.message); await new Promise(r => setTimeout(r, 100)); }
+      try { await api("/tickets", { method: "POST", token: dev, body: { title: "probe", agent: "claude-code" } }); break; } catch (e) { if (i > 100) throw new Error("provider status was never fetched: " + e.message); await new Promise(r => setTimeout(r, 100)); }
     }
     await use({ url, api, session, dev });
     proc.kill();
@@ -115,7 +116,8 @@ test("opens a ticket by card click and by URL", async ({ page, server }) => {
 });
 
 test("edits title and state from the form and the Mark ready action", async ({ page, server }) => {
-  const t = await create(server, "Edit me");
+  // The developer's own ticket: agent and model are validated against their providers.
+  const t = await server.api("/tickets", { method: "POST", token: server.dev, body: { title: "Edit me" } });
   await page.goto(`/#/tickets/${t.id}`);
   await page.fill("#detail input[name=title]", "Edited");
   await page.selectOption("#detail select[name=state]", "in_review");
@@ -264,7 +266,7 @@ test("shows an inline error when a refresh fails", async ({ page }) => {
   await expect(page.locator("#error")).toBeEmpty();
 });
 
-test("shows the owner by name, filters by owner, and reassigns it from the detail", async ({ page, server }) => {
+test("shows the owner by name, filters by owner, and takes it over from the detail", async ({ page, server }) => {
   await server.api("/users/alice-principal/approve", { method: "POST", body: { name: "Alice" } });
   await server.api("/users/bob-principal/approve", { method: "POST", body: { name: "Bob" } });
   const alice = server.session("alice-principal");
@@ -284,11 +286,12 @@ test("shows the owner by name, filters by owner, and reassigns it from the detai
   await card(page, owned.id).click();
   await expect(page.locator("#detail .pane p").first()).toContainText("owner: Alice");
   await expect(page.locator("#detail select[name=owner] option")).toHaveText(["No owner", "Dev", "Alice", "Bob"]);
-  await page.selectOption("#detail select[name=owner]", "bob-principal");
+  // Spec 3.4: a developer may only make themselves the owner.
+  await page.selectOption("#detail select[name=owner]", "dev-principal");
   await page.click("#detail button:text-is('Save')");
   await expect(page.locator("#detail .saved")).toHaveText("Saved");
-  await expect(card(page, owned.id).locator(".owner")).toHaveText("Bob");
-  expect((await server.api(`/tickets/${owned.id}`)).owner).toBe("bob-principal");
+  await expect(card(page, owned.id).locator(".owner")).toHaveText("Dev");
+  expect((await server.api(`/tickets/${owned.id}`)).owner).toBe("dev-principal");
 });
 
 test("without a session the sign-in screen shows and nothing else loads", async ({ page }) => {

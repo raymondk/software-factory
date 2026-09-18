@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use api_client::{Client, CreateComment, CreateRelation, CreateTicket, Error, ListTickets, MoveTicket, UpdateTicket};
+use api_client::{ApproveUser, Client, CreateComment, CreateRelation, CreateTicket, CreateWorker, Error, ListTickets, MoveTicket, UpdateTicket};
 
 mod common;
-use common::TOKEN;
+use common::{session, OWNER_TOKEN, TOKEN};
 
 async fn serve() -> (String, tempfile::TempDir) {
     common::serve(include_str!("../../../factory.example.toml")).await
@@ -16,7 +16,7 @@ fn new(title: &str) -> CreateTicket {
 #[tokio::test]
 async fn agents_lists_what_providers_advertise() {
     let (url, _dir) = serve().await;
-    let agents = Client::new(&url, TOKEN).agents().await.unwrap();
+    let agents = Client::new(&url, OWNER_TOKEN).agents().await.unwrap();
     let expect = |a: &str, ms: &[&str]| (a.to_string(), ms.iter().map(|m| m.to_string()).collect::<Vec<_>>());
     assert_eq!(agents.into_iter().collect::<Vec<_>>(), vec![expect("claude-code", &["sonnet", "opus"]), expect("codex", &["o3"])]);
 }
@@ -35,7 +35,7 @@ async fn config_is_served_without_the_token() {
 #[tokio::test]
 async fn agent_and_model_must_be_advertised_together_by_a_provider() {
     let (url, _dir) = serve().await;
-    let client = Client::new(&url, TOKEN);
+    let client = Client::new(&url, OWNER_TOKEN);
     bad_request(client.create_ticket(&CreateTicket { agent: Some("nope".into()), ..new("a") }).await, "agent not advertised");
     bad_request(client.create_ticket(&CreateTicket { model: Some("gpt-9".into()), ..new("a") }).await, "model not advertised");
     bad_request(client.create_ticket(&CreateTicket { agent: Some("codex".into()), model: Some("opus".into()), ..new("a") }).await, "not advertised together");
@@ -54,9 +54,37 @@ async fn agent_and_model_must_be_advertised_together_by_a_provider() {
 }
 
 #[tokio::test]
+async fn agent_and_model_are_validated_against_the_owners_providers_only() {
+    let (url, dir) = serve().await;
+    let admin = Client::new(&url, TOKEN);
+    let owner = Client::new(&url, OWNER_TOKEN);
+    // The admin's tickets have no owner: no providers to validate against, no agents to offer.
+    bad_request(admin.create_ticket(&CreateTicket { agent: Some("codex".into()), ..new("a") }).await, "unowned");
+    let unowned = admin.create_ticket(&new("a")).await.unwrap();
+    bad_request(admin.update_ticket(unowned.id, &UpdateTicket { model: Some(Some("opus".into())), ..Default::default() }).await, "unowned");
+    assert!(admin.agents().await.unwrap().is_empty());
+    // A developer without providers: nothing advertised for them, however much others advertise.
+    admin.approve_user("bob-principal", &ApproveUser { name: "Bob".into() }).await.unwrap();
+    let bob = Client::new(&url, session(&dir, "bob-principal", 1).await);
+    assert!(bob.agents().await.unwrap().is_empty());
+    bad_request(bob.create_ticket(&CreateTicket { agent: Some("codex".into()), ..new("b") }).await, "agent not advertised");
+    // The seeded owner's providers advertise both agents; a worker sees its user's.
+    assert_eq!(owner.agents().await.unwrap().keys().cloned().collect::<Vec<_>>(), ["claude-code", "codex"]);
+    let w = admin.create_worker(&CreateWorker { agent: "claude-code".into(), provider: None }).await.unwrap();
+    assert_eq!(Client::new(&url, &w.token).agents().await.unwrap().len(), 2);
+    // Taking over a pinned ticket validates the pin against the new owner's providers.
+    let pinned = owner.create_ticket(&CreateTicket { agent: Some("codex".into()), ..new("c") }).await.unwrap();
+    bad_request(bob.update_ticket(pinned.id, &UpdateTicket { owner: Some(Some("bob-principal".into())), agent: Some(Some("codex".into())), ..Default::default() }).await, "agent not advertised");
+    let t = bob.update_ticket(pinned.id, &UpdateTicket { owner: Some(Some("bob-principal".into())), ..Default::default() }).await.unwrap();
+    assert_eq!((t.owner.as_deref(), t.agent.as_deref()), (Some("bob-principal"), Some("codex")));
+    bad_request(bob.update_ticket(pinned.id, &UpdateTicket { model: Some(Some("o3".into())), ..Default::default() }).await, "not advertised together");
+    bob.update_ticket(pinned.id, &UpdateTicket { agent: Some(None), ..Default::default() }).await.unwrap();
+}
+
+#[tokio::test]
 async fn agent_and_model_are_optional_settable_and_clearable() {
     let (url, _dir) = serve().await;
-    let client = Client::new(&url, TOKEN);
+    let client = Client::new(&url, OWNER_TOKEN);
     let t = client.create_ticket(&new("a")).await.unwrap();
     assert_eq!((t.agent, t.model), (None, None));
     let t = client.create_ticket(&CreateTicket { agent: Some("codex".into()), model: Some("o3".into()), ..new("b") }).await.unwrap();

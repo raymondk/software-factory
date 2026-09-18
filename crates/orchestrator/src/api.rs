@@ -199,7 +199,7 @@ pub const BLOCKED: &str = "(tickets.state = 'ready' AND EXISTS (SELECT 1 FROM ti
 const RELATION_TYPES: [&str; 2] = ["depends_on", "related_to"];
 pub(crate) const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
 
-/// The owner is the creating developer; the admin sets none; a worker passes on the owner of the ticket it holds.
+/// The owner is the caller's principal: a developer's own, a worker's user (5); the admin sets none.
 async fn create_ticket(
     State(state): State<AppState>,
     Extension(caller): Extension<Caller>,
@@ -212,16 +212,8 @@ async fn create_ticket(
     if !STATES.contains(&state_name) {
         return Err(ApiError::BadRequest("invalid state"));
     }
-    check_advertised(&state, req.agent.as_deref(), req.model.as_deref())?;
-    let owner = match &caller {
-        Caller::User { principal, .. } => Some(principal.clone()),
-        Caller::Admin => None,
-        Caller::Worker(w) => {
-            let held: Option<(Option<String>,)> =
-                sqlx::query_as("SELECT owner FROM tickets WHERE assignee = ?1 ORDER BY rank ASC, id ASC LIMIT 1").bind(w).fetch_optional(&state.pool).await?;
-            held.and_then(|(o,)| o)
-        }
-    };
+    let owner = principal_of(&state, &caller).await?;
+    check_advertised(&state, owner.as_deref(), req.agent.as_deref(), req.model.as_deref()).await?;
     let row: Row = sqlx::query_as(&format!(
         "INSERT INTO tickets (title, description, state, rank, created_at, updated_at, agent, model, owner) \
          VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(rank), 0) + 1 FROM tickets), {NOW}, {NOW}, ?4, ?5, ?6) \
@@ -238,13 +230,32 @@ async fn create_ticket(
     Ok((StatusCode::CREATED, Json(row.into())))
 }
 
-/// Spec 3.6: an agent or model on a ticket must be advertised together by some provider's last status.
-fn check_advertised(state: &AppState, agent: Option<&str>, model: Option<&str>) -> Result<(), ApiError> {
-    if (agent.is_some() || model.is_some()) && !state.providers.advertised(agent, model) {
+/// The principal a caller acts as: a developer's own, a worker's user (the owner of its provider), none for the admin.
+async fn principal_of(state: &AppState, caller: &Caller) -> Result<Option<String>, ApiError> {
+    Ok(match caller {
+        Caller::Admin => None,
+        Caller::User { principal, .. } => Some(principal.clone()),
+        Caller::Worker(w) => {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT p.owner FROM workers w JOIN providers p ON p.id = w.provider WHERE w.id = ?1").bind(w).fetch_optional(&state.pool).await?;
+            row.map(|(o,)| o)
+        }
+    })
+}
+
+/// Spec 3.6: an agent or model on a ticket must be advertised together by the last status of one of the owner's
+/// providers; an unowned ticket accepts neither.
+async fn check_advertised(state: &AppState, owner: Option<&str>, agent: Option<&str>, model: Option<&str>) -> Result<(), ApiError> {
+    if agent.is_none() && model.is_none() {
+        return Ok(());
+    }
+    let Some(owner) = owner else { return Err(ApiError::BadRequest("an unowned ticket cannot set agent or model")) };
+    let providers = state.providers.owned_ids(owner).await?;
+    if !state.providers.advertised(&providers, agent, model) {
         return Err(ApiError::BadRequest(match (agent, model) {
-            (Some(_), None) => "agent not advertised by any provider",
-            (None, Some(_)) => "model not advertised by any provider",
-            _ => "agent and model not advertised together by any provider",
+            (Some(_), None) => "agent not advertised by the owner's providers",
+            (None, Some(_)) => "model not advertised by the owner's providers",
+            _ => "agent and model not advertised together by the owner's providers",
         }));
     }
     Ok(())
@@ -501,12 +512,29 @@ async fn update_ticket(
         return Err(ApiError::BadRequest("invalid state"));
     }
     authorize(&caller, &state.pool, id).await?;
+    let (current_owner, assignee, agent, model): (Option<String>, Option<String>, Option<String>, Option<String>) =
+        sqlx::query_as("SELECT owner, assignee, agent, model FROM tickets WHERE id = ?1").bind(id).fetch_optional(&state.pool).await?.ok_or(ApiError::NotFound)?;
+    // Spec 3.4: a caller may make themselves the owner, and the current owner may clear it; nobody makes someone else
+    // the owner, and nothing changes while a worker holds the ticket.
+    if let Some(new_owner) = &req.owner {
+        if assignee.is_some() {
+            return Err(ApiError::Conflict("owner cannot change while a worker holds the ticket"));
+        }
+        let me = principal_of(&state, &caller).await?;
+        let allowed = match new_owner {
+            Some(p) => me.as_deref() == Some(p.as_str()),
+            None => me.is_some() && me == current_owner,
+        };
+        if !allowed {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    // Agent and model are validated together, as they will be stored, against the resulting owner's providers.
     if req.agent.is_some() || req.model.is_some() {
-        let (agent, model): (Option<String>, Option<String>) =
-            sqlx::query_as("SELECT agent, model FROM tickets WHERE id = ?1").bind(id).fetch_optional(&state.pool).await?.ok_or(ApiError::NotFound)?;
+        let owner = req.owner.clone().unwrap_or(current_owner);
         let agent = req.agent.clone().unwrap_or(agent);
         let model = req.model.clone().unwrap_or(model);
-        check_advertised(&state, agent.as_deref(), model.as_deref())?;
+        check_advertised(&state, owner.as_deref(), agent.as_deref(), model.as_deref()).await?;
     }
     // Spec 3.2: a state change clears the assignee unless the same patch sets it, or the holding worker moves it to
     // in_progress (authorize guarantees a worker caller is the assignee).
@@ -917,9 +945,14 @@ async fn config(State(state): State<AppState>) -> Json<std::sync::Arc<Config>> {
     Json(state.config.clone())
 }
 
-/// Spec 4.2: what providers advertise, for the UI to offer when setting agent and model on a ticket.
-async fn agents(State(state): State<AppState>) -> Json<std::collections::BTreeMap<String, Vec<String>>> {
-    Json(state.providers.agents())
+/// Spec 4.2: what the caller's own providers advertise (a worker's: its user's), for the UI to offer when setting
+/// agent and model on a ticket. Empty for the admin.
+async fn agents(State(state): State<AppState>, Extension(caller): Extension<Caller>) -> Result<Json<std::collections::BTreeMap<String, Vec<String>>>, ApiError> {
+    let providers = match principal_of(&state, &caller).await? {
+        Some(p) => state.providers.owned_ids(&p).await?,
+        None => vec![],
+    };
+    Ok(Json(state.providers.agents(&providers)))
 }
 
 async fn metrics(State(state): State<AppState>) -> Result<Json<Metrics>, ApiError> {
