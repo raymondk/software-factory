@@ -472,6 +472,14 @@ async fn reaper_marks_silent_workers_dead_and_frees_tickets() {
     let t = human.get_ticket(id).await.unwrap();
     assert_eq!((t.state.as_str(), t.assignee), ("in_progress", None));
     assert!(t.runs[0].ended_at.is_some(), "reaping ends the worker's open run");
+    // ...and says so on the ticket, like the worker's own timeout path would.
+    assert_eq!(t.comments.len(), 1);
+    assert_eq!(t.comments[0].author, "orchestrator");
+    assert_eq!(
+        t.comments[0].body,
+        format!("Worker {} disappeared (no heartbeat for 200ms); leaving in_progress for another worker. Log: [run {run}](#/tickets/{id}/runs/{run})", w.id, run = t.runs[0].id)
+    );
+    assert!(human.get_ticket(ticket(&human, "untouched", "todo").await).await.unwrap().comments.is_empty());
 
     // Dead tokens no longer authenticate.
     assert_eq!(status(wc.heartbeat(&w.id).await), 401);

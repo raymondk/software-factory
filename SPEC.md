@@ -168,7 +168,7 @@ Later: worker affinity.
 
 ### 4.4 Reaper
 
-A worker that misses heartbeats for longer than `heartbeat_timeout` is marked dead. Any ticket it holds keeps its state and has its assignee cleared, and its open run is ended. Since `in_progress` is workable, the next worker resumes it. The worker's provider is asked to stop it.
+A worker that misses heartbeats for longer than `heartbeat_timeout` is marked dead. Any ticket it holds keeps its state and has its assignee cleared, its open run is ended, and a comment on the ticket says the worker disappeared, linking the run's log. Since `in_progress` is workable, the next worker resumes it. The worker's provider is asked to stop it.
 
 There is no retry cap. A ticket that keeps killing workers is caught by humans watching the UI.
 

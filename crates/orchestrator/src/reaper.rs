@@ -3,7 +3,9 @@ use std::time::Duration;
 use sqlx::{Connection, SqlitePool};
 
 /// Marks every worker silent for longer than `timeout` dead (a `starting` worker counts from its creation), frees
-/// the tickets they hold, keeping their state, and ends their open runs. Returns the ids of the workers reaped.
+/// the tickets they hold, keeping their state, and ends their open runs, commenting on each such ticket that its
+/// worker disappeared, with a link to the run's log (mirroring the worker's own timeout path, spec 6.1). Returns the
+/// ids of the workers reaped.
 pub async fn reap(pool: &SqlitePool, timeout: Duration) -> sqlx::Result<Vec<String>> {
     let mut conn = pool.acquire().await?;
     let mut tx = conn.begin_with("BEGIN IMMEDIATE").await?;
@@ -16,6 +18,24 @@ pub async fn reap(pool: &SqlitePool, timeout: Duration) -> sqlx::Result<Vec<Stri
     .await?;
     let ids: Vec<String> = ids.into_iter().map(|(id,)| id).collect();
     if !ids.is_empty() {
+        let open: Vec<(i64, i64, String, String)> = sqlx::query_as(
+            "SELECT r.id, r.ticket_id, r.worker_id, t.state FROM runs r JOIN tickets t ON t.id = r.ticket_id \
+             WHERE r.ended_at IS NULL AND r.worker_id IN (SELECT value FROM json_each(?1))",
+        )
+        .bind(serde_json::to_string(&ids).unwrap())
+        .fetch_all(&mut *tx)
+        .await?;
+        for (run, ticket, worker, state) in open {
+            let body = format!(
+                "Worker {worker} disappeared (no heartbeat for {}); leaving {state} for another worker. Log: [run {run}](#/tickets/{ticket}/runs/{run})",
+                humantime_serde::re::humantime::format_duration(timeout)
+            );
+            sqlx::query("INSERT INTO comments (ticket_id, author, body, created_at) VALUES (?1, 'orchestrator', ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
+                .bind(ticket)
+                .bind(body)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query(
             "UPDATE tickets SET assignee = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
              WHERE assignee IN (SELECT value FROM json_each(?1))",
