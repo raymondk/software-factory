@@ -35,12 +35,15 @@ pub struct Agent {
 
 impl Config {
     pub fn load(path: &Path) -> anyhow::Result<Config> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        Config::parse(&text).with_context(|| format!("parsing {}", path.display()))
+        Config::from_table(load_table(path)?).with_context(|| format!("in {}", path.display()))
     }
 
     pub fn parse(text: &str) -> anyhow::Result<Config> {
-        let config: Config = toml::from_str(text)?;
+        Config::from_table(toml::from_str(text)?)
+    }
+
+    fn from_table(table: toml::Table) -> anyhow::Result<Config> {
+        let config: Config = table.try_into()?;
         if config.provider.token.is_empty() {
             bail!("provider.token must not be empty");
         }
@@ -53,6 +56,32 @@ impl Config {
             }
         }
         Ok(config)
+    }
+}
+
+/// Reads `path`, then `<stem>.secrets.toml` beside it if present, whose values win. Tables merge key by key, so a
+/// committed `factory.toml` can hold everything but the secrets and the gitignored secrets file the rest.
+fn load_table(path: &Path) -> anyhow::Result<toml::Table> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut table: toml::Table = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let secrets = path.with_file_name(format!("{stem}.secrets.toml"));
+    match std::fs::read_to_string(&secrets) {
+        Ok(text) => merge(&mut table, toml::from_str(&text).with_context(|| format!("parsing {}", secrets.display()))?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("reading {}", secrets.display())),
+    }
+    Ok(table)
+}
+
+fn merge(base: &mut toml::Table, over: toml::Table) {
+    for (key, value) in over {
+        match (base.get_mut(&key), value) {
+            (Some(toml::Value::Table(b)), toml::Value::Table(o)) => merge(b, o),
+            (_, value) => {
+                base.insert(key, value);
+            }
+        }
     }
 }
 
@@ -71,6 +100,17 @@ mod tests {
         assert_eq!(agent.image, "software-factory/worker:latest");
         assert_eq!((agent.models.as_slice(), agent.default_model.as_str()), (["sonnet".to_string(), "opus".to_string()].as_slice(), "sonnet"));
         assert_eq!(c.worker_env["GIT_TOKEN"], "change-me");
+    }
+
+    #[test]
+    fn secrets_file_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("provider.toml"), EXAMPLE).unwrap();
+        std::fs::write(dir.path().join("provider.secrets.toml"), "[provider]\ntoken = \"real\"\n[worker_env]\nGIT_TOKEN = \"ghp\"\nEXTRA = \"1\"\n").unwrap();
+        let c = Config::load(&dir.path().join("provider.toml")).unwrap();
+        assert_eq!(c.provider.token, "real");
+        assert_eq!((c.worker_env["GIT_TOKEN"].as_str(), c.worker_env["CLAUDE_CODE_OAUTH_TOKEN"].as_str(), c.worker_env["EXTRA"].as_str()), ("ghp", "change-me", "1"));
+        assert_eq!(c.agents.len(), 1);
     }
 
     #[test]

@@ -60,7 +60,8 @@ FACTORY_POLL_INTERVAL = "2s"
 TOML
 else
   cp demo/factory.toml "$tmp/factory.toml"
-  sed -e "s|\${GIT_TOKEN}|$GIT_TOKEN|" -e "s|\${CLAUDE_CODE_OAUTH_TOKEN}|$CLAUDE_CODE_OAUTH_TOKEN|" demo/provider.toml > "$tmp/provider.toml"
+  cp demo/provider.toml "$tmp/provider.toml"
+  printf '[worker_env]\nGIT_TOKEN = "%s"\nCLAUDE_CODE_OAUTH_TOKEN = "%s"\n' "$GIT_TOKEN" "$CLAUDE_CODE_OAUTH_TOKEN" > "$tmp/provider.secrets.toml"
 fi
 
 cleanup() {

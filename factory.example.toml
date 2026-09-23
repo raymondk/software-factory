@@ -4,7 +4,7 @@ repos = ["https://github.com/org/repo-a.git", "https://github.com/org/repo-b.git
 
 [orchestrator]
 listen = "0.0.0.0:8080"
-token = "change-me"
+token = "change-me"   # or put it in factory.secrets.toml (gitignored); its values override this file's
 heartbeat_timeout = "60s"
 # log_retention = "7d"   # worker log lines older than this are purged; runs are kept
 # database = "factory.db"   # defaults to factory.db next to this file

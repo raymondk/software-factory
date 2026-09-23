@@ -8,7 +8,4 @@ image = "software-factory/worker:latest"
 models = ["sonnet", "opus"]
 default_model = "sonnet"
 
-# demo.sh fills these from the environment into a copy in a temp dir.
-[worker_env]
-GIT_TOKEN = "${GIT_TOKEN}"
-CLAUDE_CODE_OAUTH_TOKEN = "${CLAUDE_CODE_OAUTH_TOKEN}"
+# demo.sh writes GIT_TOKEN and CLAUDE_CODE_OAUTH_TOKEN from the environment into provider.secrets.toml beside its copy.

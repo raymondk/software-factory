@@ -8,6 +8,7 @@ image = "software-factory/worker:latest"
 models = ["sonnet", "opus"]
 default_model = "sonnet"
 
+# Secrets belong in provider.secrets.toml (gitignored), same layout; its values override this file's.
 [worker_env]
 GIT_TOKEN = "change-me"
 CLAUDE_CODE_OAUTH_TOKEN = "change-me"

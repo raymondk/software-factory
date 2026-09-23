@@ -298,6 +298,10 @@ GIT_TOKEN = "..."
 CLAUDE_CODE_OAUTH_TOKEN = "..."
 ```
 
+Secrets stay out of source control the same way for both: next to `factory.toml` or `provider.toml`, an optional
+`factory.secrets.toml` or `provider.secrets.toml` with the same layout is merged over it at load, table by table, and its
+values win. The committed file keeps the non-secret keys (or placeholders); `*.secrets.toml` is gitignored.
+
 ## 8. Metrics
 
 Workers report usage per ticket after each agent run. The orchestrator stores raw records and aggregates by ticket, worker, agent and model. Exposed via `GET /metrics` and the UI.
