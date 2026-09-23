@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use sqlx::SqlitePool;
+use tracing::{debug, info, warn};
 
 use crate::api;
 use crate::config::Config;
@@ -28,6 +29,7 @@ pub async fn tick(pool: &SqlitePool, config: &Config, providers: &Providers) -> 
     let alive = workers.iter().filter(|(.., s)| s != "dead").count() as u32;
     let mut slots = config.scheduler.max_workers.saturating_sub(alive);
     let mut free: BTreeMap<i64, u32> = statuses.iter().map(|(n, s)| (*n, s.capacity.saturating_sub(s.in_use))).collect();
+    debug!(providers = statuses.len(), workers = workers.len(), alive, slots, free = ?free, "scheduler tick");
 
     // Available tickets per (owner, agent, model). Unowned tickets have no worker to take them. Those with no agent form
     // the owner's pool, which any of their workers drains.
@@ -41,6 +43,9 @@ pub async fn tick(pool: &SqlitePool, config: &Config, providers: &Providers) -> 
     .bind(states)
     .fetch_all(pool)
     .await?;
+    if !demand.is_empty() {
+        debug!(demand = ?demand, "available tickets by (owner, agent, model)");
+    }
     let pool_empty = |owner: &str| demand.iter().filter(|(o, ..)| o == owner).all(|(_, a, ..)| a.is_some());
     let has_work = |owner: &str, agent: &str| demand.iter().any(|(o, a, ..)| o == owner && a.as_deref() == Some(agent));
 
@@ -54,9 +59,9 @@ pub async fn tick(pool: &SqlitePool, config: &Config, providers: &Providers) -> 
             if marked.rows_affected() == 0 {
                 continue;
             }
-            eprintln!("scheduler: stopping idle {agent} worker {id} on {provider}");
+            info!(worker = %id, agent = %agent, provider, "stopping idle worker");
             if let Err(e) = clients[provider].stop(id).await {
-                eprintln!("scheduler: stop {id}: {e:#}");
+                warn!(worker = %id, provider, "stop failed: {e:#}");
             }
         } else if status == "idle" || status == "starting" {
             pending.push((owner.clone(), agent.clone(), *provider));
@@ -67,16 +72,16 @@ pub async fn tick(pool: &SqlitePool, config: &Config, providers: &Providers) -> 
         let client = &clients[name];
         // Dead workers (reaped, or whose stop failed) the provider still runs.
         for (id, ..) in workers.iter().filter(|(id, .., s)| s == "dead" && status.workers.iter().any(|w| &w.worker_id == id)) {
-            eprintln!("scheduler: stopping dead worker {id} on {name}");
+            info!(worker = %id, provider = name, "stopping dead worker the provider still runs");
             if let Err(e) = client.stop(id).await {
-                eprintln!("scheduler: stop {id}: {e:#}");
+                warn!(worker = %id, provider = name, "stop failed: {e:#}");
             }
         }
         // Provider workers the orchestrator has no record of (restart with a fresh database): they can never register.
         for w in status.workers.iter().filter(|w| !workers.iter().any(|(id, ..)| id == &w.worker_id)) {
-            eprintln!("scheduler: stopping unknown worker {} on {name}", w.worker_id);
+            info!(worker = %w.worker_id, provider = name, "stopping worker unknown to the orchestrator");
             if let Err(e) = client.stop(&w.worker_id).await {
-                eprintln!("scheduler: stop {}: {e:#}", w.worker_id);
+                warn!(worker = %w.worker_id, provider = name, "stop failed: {e:#}");
             }
         }
     }
@@ -120,13 +125,13 @@ pub async fn tick(pool: &SqlitePool, config: &Config, providers: &Providers) -> 
                 orchestrator_url: config.orchestrator.public_url.clone().unwrap(),
                 worker_token: w.token,
             };
-            eprintln!("scheduler: starting {chosen} worker {} on {provider}", w.id);
+            info!(worker = %w.id, agent = chosen, provider, owner = %owner, model = model.as_deref().unwrap_or("default"), "starting worker");
             *free.get_mut(&provider).unwrap() -= 1;
             slots -= 1;
             *n -= 1;
             if let Err(e) = clients[&provider].start(&req).await {
                 sqlx::query("UPDATE workers SET status = 'dead' WHERE id = ?1").bind(&w.id).execute(pool).await?;
-                eprintln!("scheduler: start {} on {provider}: {e:#}", w.id);
+                warn!(worker = %w.id, provider, "start failed, worker marked dead: {e:#}");
             }
         }
     }
@@ -138,7 +143,7 @@ pub async fn run(pool: SqlitePool, config: std::sync::Arc<Config>, providers: st
     loop {
         interval.tick().await;
         if let Err(e) = tick(&pool, &config, &providers).await {
-            eprintln!("scheduler: {e:#}");
+            warn!("scheduler tick failed: {e:#}");
         }
     }
 }

@@ -12,6 +12,7 @@ use axum::http::StatusCode;
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use tracing::{info, warn};
 
 use crate::api::{ApiError, Caller, NOW};
 use crate::AppState;
@@ -79,7 +80,7 @@ impl Providers {
                 Ok(status) => {
                     fresh.insert(*id, status);
                 }
-                Err(e) => eprintln!("scheduler: provider {id}: {e:#}"),
+                Err(e) => warn!(provider = id, url = %client.url, "provider did not answer: {e:#}"),
             }
         }
         let mut statuses = self.statuses.write().unwrap();
@@ -185,7 +186,10 @@ pub async fn create(
             .fetch_one(&state.pool)
             .await;
     match row {
-        Ok(row) => Ok((StatusCode::CREATED, Json(row.into_api(None)))),
+        Ok(row) => {
+            info!(provider = row.id, name = %row.name, url = %row.url, owner = %row.owner, "provider added");
+            Ok((StatusCode::CREATED, Json(row.into_api(None))))
+        }
         Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Err(ApiError::Conflict("you already have a provider by that name")),
         Err(e) => Err(e.into()),
     }
@@ -237,9 +241,10 @@ pub(crate) async fn owned(state: &AppState, owner: &str) -> Result<Vec<Row>, Api
 pub(crate) async fn remove(state: &AppState, provider: Row) -> Result<(), ApiError> {
     let client = Provider::new(&provider.url, &provider.token);
     let live: Vec<(String,)> = sqlx::query_as("SELECT id FROM workers WHERE provider = ?1 AND status != 'dead'").bind(provider.id).fetch_all(&state.pool).await?;
+    info!(provider = provider.id, name = %provider.name, live_workers = live.len(), "removing provider");
     for (id,) in live {
         if let Err(e) = client.stop(&id).await {
-            eprintln!("provider {}: stop {id}: {e:#}", provider.id);
+            warn!(provider = provider.id, worker = %id, "stop failed: {e:#}");
         }
     }
     let mut tx = state.pool.begin().await?;

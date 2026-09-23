@@ -88,6 +88,7 @@ pub async fn login(State(state): State<AppState>, Json(req): Json<Login>) -> Res
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    tracing::info!(principal = %principal, status = %status, "login");
     Ok(Json(Session { token, principal, status }))
 }
 

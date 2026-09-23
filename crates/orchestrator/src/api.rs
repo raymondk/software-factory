@@ -9,6 +9,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Extension, Json, Router};
 use sqlx::{Connection, SqliteExecutor};
+use tracing::{debug, error, info};
 
 use crate::config::Config;
 use crate::{provider, users, AppState, STATES};
@@ -54,7 +55,33 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/challenge", get(crate::auth::challenge))
         .route("/auth/login", post(crate::auth::login))
         .merge(api)
+        .layer(middleware::from_fn(log_request))
         .with_state(state)
+}
+
+/// The caller a request authenticated as, for the request log. `auth` sets it on the response.
+#[derive(Clone)]
+struct CallerName(String);
+
+/// One line per request. Reads and the worker's periodic calls (heartbeat, poll, log shipping) are `debug`, the rest
+/// `info`, server errors `error`.
+async fn log_request(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let started = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let status = resp.status().as_u16();
+    let ms = started.elapsed().as_millis();
+    let caller = resp.extensions().get::<CallerName>().map(|c| c.0.as_str()).unwrap_or("-");
+    let periodic = path.ends_with("/heartbeat") || path.ends_with("/poll") || path.ends_with("/logs");
+    if status >= 500 {
+        error!(%method, path, status, ms, caller, "request");
+    } else if method == axum::http::Method::GET || periodic {
+        debug!(%method, path, status, ms, caller, "request");
+    } else {
+        info!(%method, path, status, ms, caller, "request");
+    }
+    resp
 }
 
 /// Who is making the request, as established by `auth`. Handlers read it via `Extension<Caller>`.
@@ -107,9 +134,12 @@ async fn auth(State(state): State<AppState>, mut req: Request, next: Next) -> Re
     if matches!(&caller, Caller::User { status, .. } if status != "approved") && req.uri().path() != "/me" {
         return ApiError::Forbidden.into_response();
     }
+    let name = CallerName(caller.name().to_string());
     req.extensions_mut().insert(caller);
     req.extensions_mut().insert(crate::auth::BearerToken(token));
-    next.run(req).await
+    let mut resp = next.run(req).await;
+    resp.extensions_mut().insert(name);
+    resp
 }
 
 /// Admin token, then a user's session or personal token, then a live worker's token.
@@ -227,6 +257,7 @@ async fn create_ticket(
     .bind(owner)
     .fetch_one(&state.pool)
     .await?;
+    info!(ticket = row.id, state = state_name, by = caller.name(), "ticket created");
     Ok((StatusCode::CREATED, Json(row.into())))
 }
 
@@ -515,8 +546,8 @@ async fn update_ticket(
         return Err(ApiError::BadRequest("invalid state"));
     }
     authorize(&caller, &state.pool, id).await?;
-    let (current_owner, assignee, agent, model): (Option<String>, Option<String>, Option<String>, Option<String>) =
-        sqlx::query_as("SELECT owner, assignee, agent, model FROM tickets WHERE id = ?1").bind(id).fetch_optional(&state.pool).await?.ok_or(ApiError::NotFound)?;
+    let (current_owner, assignee, agent, model, current_state): (Option<String>, Option<String>, Option<String>, Option<String>, String) =
+        sqlx::query_as("SELECT owner, assignee, agent, model, state FROM tickets WHERE id = ?1").bind(id).fetch_optional(&state.pool).await?.ok_or(ApiError::NotFound)?;
     // Spec 3.4: a caller may make themselves the owner, and the current owner may clear it; nobody makes someone else
     // the owner, and nothing changes while a worker holds the ticket.
     if let Some(new_owner) = &req.owner {
@@ -565,6 +596,9 @@ async fn update_ticket(
     .bind(req.owner.clone().flatten())
     .fetch_optional(&state.pool)
     .await?;
+    if let Some(to) = req.state.as_deref().filter(|to| *to != current_state) {
+        info!(ticket = id, from = current_state.as_str(), to, by = caller.name(), "ticket state changed");
+    }
     row.map(|r| Json(r.into())).ok_or(ApiError::NotFound)
 }
 
@@ -701,7 +735,9 @@ async fn set_status(db: impl SqliteExecutor<'_>, id: &str, status: &str) -> Resu
 
 async fn register(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
     caller.require_worker(&id)?;
-    Ok(Json(set_status(&state.pool, &id, "idle").await?))
+    let worker = set_status(&state.pool, &id, "idle").await?;
+    info!(worker = %id, agent = %worker.agent, provider = worker.provider, "worker registered");
+    Ok(Json(worker))
 }
 
 async fn heartbeat(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
@@ -765,6 +801,7 @@ async fn poll(
         .await?;
     tx.commit().await?;
     let ticket: Ticket = row.into();
+    info!(worker = %id, ticket = ticket.id, run, state = %ticket.state, model = ticket.model.as_deref().unwrap_or("default"), "run started");
     let prompt = render(&prompts[&ticket.state], &ticket);
     let model = ticket.model.clone();
     Ok(Json(PollResponse { ticket, run, prompt, model, repos: state.config.project.repos.clone(), run_timeout: agent.run_timeout }).into_response())
@@ -836,6 +873,7 @@ async fn report_usage(
     .bind(&req.model)
     .fetch_optional(&state.pool)
     .await?;
+    info!(worker = %id, ticket = req.ticket_id, model = req.model.as_deref().unwrap_or("-"), tokens_in = req.tokens_in, tokens_out = req.tokens_out, cost = req.cost, "run ended");
     row.map(|r| (StatusCode::CREATED, Json(r.into()))).ok_or(ApiError::NotFound)
 }
 
@@ -1002,7 +1040,10 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.to_string()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m.to_string()),
-            ApiError::Db(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            ApiError::Db(e) => {
+                error!("database error: {e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            }
         };
         (status, Json(serde_json::json!({ "error": msg }))).into_response()
     }

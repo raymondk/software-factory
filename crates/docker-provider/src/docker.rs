@@ -14,7 +14,10 @@ pub const LABEL: &str = "software-factory.worker_id";
 pub const AGENT_LABEL: &str = "software-factory.agent";
 
 async fn output(mut cmd: Command) -> anyhow::Result<std::process::Output> {
-    cmd.stdin(Stdio::null()).output().await.context("running docker")
+    let args: Vec<String> = cmd.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    let out = cmd.stdin(Stdio::null()).output().await.context("running docker")?;
+    tracing::debug!(status = %out.status, "docker {}", args.join(" "));
+    Ok(out)
 }
 
 fn stdout(out: &std::process::Output) -> String {

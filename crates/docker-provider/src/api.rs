@@ -8,6 +8,7 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tracing::{debug, error, info, warn};
 
 use crate::{docker, AppState, Running};
 
@@ -17,7 +18,24 @@ pub fn router(state: AppState) -> Router {
         .route("/workers", post(start_worker))
         .route("/workers/{id}", delete(stop_worker))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
-    Router::new().route("/status", get(status)).merge(workers).with_state(state)
+    Router::new().route("/status", get(status)).merge(workers).layer(middleware::from_fn(log_request)).with_state(state)
+}
+
+/// One line per request: `/status` polls are `debug`, the rest `info`, server errors `error`.
+async fn log_request(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let started = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let (status, ms) = (resp.status().as_u16(), started.elapsed().as_millis());
+    if status >= 500 {
+        error!(%method, path, status, ms, "request");
+    } else if path == "/status" {
+        debug!(%method, path, status, ms, "request");
+    } else {
+        info!(%method, path, status, ms, "request");
+    }
+    resp
 }
 
 async fn auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
@@ -83,6 +101,11 @@ impl IntoResponse for ApiError {
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
         };
+        if code.is_server_error() {
+            error!("{msg}");
+        } else if code != StatusCode::UNAUTHORIZED {
+            warn!("{msg}");
+        }
         (code, Json(json!({ "error": msg }))).into_response()
     }
 }
@@ -90,7 +113,13 @@ impl IntoResponse for ApiError {
 /// Refreshes the worker map against Docker, dropping containers Docker no longer knows.
 async fn reconcile(workers: &mut BTreeMap<String, Running>) -> anyhow::Result<Vec<Worker>> {
     let states = docker::states(workers.values().map(|r| r.container_id.as_str())).await?;
-    workers.retain(|_, r| states.contains_key(&r.container_id));
+    workers.retain(|w, r| {
+        let known = states.contains_key(&r.container_id);
+        if !known {
+            info!(worker = %w, container = %r.container_id, "container gone from docker; forgetting worker");
+        }
+        known
+    });
     Ok(workers
         .iter()
         .map(|(w, r)| Worker { worker_id: w.clone(), agent: r.agent.clone(), container_id: r.container_id.clone(), status: states[&r.container_id].clone() })
@@ -125,6 +154,7 @@ async fn start_worker(
     env.insert("FACTORY_AGENT".into(), req.agent.clone());
     env.insert("FACTORY_MODEL".into(), agent.default_model.clone());
     let container_id = docker::run(&agent.image, &req.worker_id, &req.agent, &env).await?;
+    info!(worker = %req.worker_id, agent = %req.agent, image = %agent.image, container = %container_id, in_use = in_use(&current) + 1, max, "started worker");
     workers.insert(req.worker_id.clone(), Running { container_id: container_id.clone(), agent: req.agent.clone() });
     let worker = Worker { worker_id: req.worker_id, agent: req.agent, container_id, status: "running".into() };
     Ok((StatusCode::CREATED, Json(worker)))
@@ -136,6 +166,7 @@ async fn stop_worker(State(state): State<AppState>, Path(id): Path<String>) -> R
         return Err(ApiError::NotFound(format!("no worker {id}")));
     };
     docker::remove(&running.container_id).await?;
+    info!(worker = %id, container = %running.container_id, "stopped worker");
     workers.remove(&id);
     Ok(StatusCode::NO_CONTENT)
 }

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use sqlx::{Connection, SqlitePool};
+use tracing::{error, info, warn};
 
 /// Marks every worker silent for longer than `timeout` dead (a `starting` worker counts from its creation), frees
 /// the tickets they hold, keeping their state, and ends their open runs, commenting on each such ticket that its
@@ -26,6 +27,7 @@ pub async fn reap(pool: &SqlitePool, timeout: Duration) -> sqlx::Result<Vec<Stri
         .fetch_all(&mut *tx)
         .await?;
         for (run, ticket, worker, state) in open {
+            warn!(worker = %worker, ticket, run, state = %state, "worker disappeared mid-run; ticket released");
             let body = format!(
                 "Worker {worker} disappeared (no heartbeat for {}); leaving {state} for another worker. Log: [run {run}](#/tickets/{ticket}/runs/{run})",
                 humantime_serde::re::humantime::format_duration(timeout)
@@ -76,8 +78,8 @@ pub async fn run_purge(pool: SqlitePool, retention: Duration) {
         interval.tick().await;
         match purge_logs(&pool, retention).await {
             Ok(0) => {}
-            Ok(n) => eprintln!("purged {n} log lines older than {}", humantime_serde::re::humantime::format_duration(retention)),
-            Err(e) => eprintln!("log purge: {e}"),
+            Ok(n) => info!(lines = n, retention = %humantime_serde::re::humantime::format_duration(retention), "purged old log lines"),
+            Err(e) => error!("log purge failed: {e}"),
         }
     }
 }
@@ -88,8 +90,8 @@ pub async fn run(pool: SqlitePool, timeout: Duration) {
     loop {
         interval.tick().await;
         match reap(&pool, timeout).await {
-            Ok(ids) => ids.iter().for_each(|id| eprintln!("reaped worker {id}")),
-            Err(e) => eprintln!("reaper: {e}"),
+            Ok(ids) => ids.iter().for_each(|id| warn!(worker = %id, timeout = %humantime_serde::re::humantime::format_duration(timeout), "no heartbeat; worker marked dead")),
+            Err(e) => error!("reaper failed: {e}"),
         }
     }
 }

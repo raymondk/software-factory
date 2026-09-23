@@ -29,7 +29,7 @@ impl AppState {
     /// Like `new`, but seeds the map with containers a previous instance started.
     pub async fn recover(config: config::Config) -> anyhow::Result<AppState> {
         let workers = docker::tracked().await?;
-        eprintln!("recovered {} workers from docker", workers.len());
+        tracing::info!(workers = workers.len(), ids = ?workers.keys().collect::<Vec<_>>(), "recovered workers from docker");
         Ok(AppState { config: Arc::new(config), workers: Arc::new(Mutex::new(workers)) })
     }
 }

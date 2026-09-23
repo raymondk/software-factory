@@ -50,6 +50,10 @@ runs a shell stand-in for the agent and needs no credentials. `DEMO_KILL=1` kill
 show the ticket staying `in_progress` and a fresh worker resuming it. For the real thing, edit `repos` in
 `demo/factory.toml`, export `GIT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`, and drop `DEMO_AGENT`.
 
+The orchestrator and the provider log to stderr with timestamps and levels. `RUST_LOG` sets verbosity: `info` (the
+default) covers requests that change something, worker and run lifecycle, ticket state changes, and provider
+start/stop; `RUST_LOG=debug` adds every request, heartbeats, polls, scheduler ticks, and each docker command.
+
 ## UI
 
 The UI is a Vite + Preact project in `crates/orchestrator/ui/`; `cargo build` runs `npm run build` and embeds the result, so run
