@@ -134,7 +134,7 @@ function Factory({ me, onSignedOut }) {
   const owners = [...new Set([...users.map(u => u.principal), ...(tickets ?? []).map(t => t.owner).filter(Boolean)])];
   return (
     <Ctx.Provider value={{ refresh, select, showError, users, me }}>
-      <div id="top"><h1>Software Factory</h1><div class="row"><UserBar me={me} onSignedOut={onSignedOut} /><ConfigDialog /></div></div>
+      <div id="top"><h1>Software Factory</h1><div class="row"><UserBar me={me} onSignedOut={onSignedOut} /><ConfigDialog providers={providers} /></div></div>
       <div id="error">{error && <><span>{error.message}</span><button onClick={() => setError(null)}>×</button></>}</div>
       <section>
         <CreateDialog agents={agents} unowned={!!me.admin}>

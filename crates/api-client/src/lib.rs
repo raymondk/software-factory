@@ -227,6 +227,7 @@ pub struct ProviderStatus {
 }
 
 /// A worker provider as listed: never the token. `status` is the last it returned; null until it answered.
+/// `reachable`: it answered the last check; `last_seen`: when it last answered; `last_error`: why it last did not.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
     pub id: i64,
@@ -236,6 +237,18 @@ pub struct Provider {
     pub url: String,
     pub created_at: String,
     pub status: Option<ProviderStatus>,
+    #[serde(default)]
+    pub reachable: bool,
+    #[serde(default)]
+    pub last_seen: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+/// A provider's token, revealed to its owner only (`GET /providers/{id}/token`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderToken {
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -500,6 +513,11 @@ impl Client {
 
     pub async fn create_provider(&self, req: &CreateProvider) -> Result<Provider, Error> {
         let r = self.http.post(format!("{}/providers", self.base)).bearer_auth(&self.token).json(req);
+        Self::send(r).await
+    }
+
+    pub async fn provider_token(&self, id: i64) -> Result<ProviderToken, Error> {
+        let r = self.http.get(format!("{}/providers/{id}/token", self.base)).bearer_auth(&self.token);
         Self::send(r).await
     }
 

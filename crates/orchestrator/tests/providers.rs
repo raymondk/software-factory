@@ -60,6 +60,14 @@ async fn developers_add_list_update_and_remove_their_own_providers() {
     assert_eq!(listed.iter().map(|p| (p.id, p.owner.as_str())).collect::<Vec<_>>(), [(1, OWNER), (2, OWNER), (3, "alice-principal"), (4, "bob-principal")]);
     assert_eq!(listed[0].status.as_ref().unwrap().capacity, 4);
     assert!(listed[2].status.is_none());
+    assert_eq!((listed[2].reachable, listed[2].last_seen.as_deref(), listed[2].last_error.as_deref()), (false, None, None), "never checked yet");
+
+    // Only the owner reveals the token, the admin included.
+    assert_eq!(alice.provider_token(mine.id).await.unwrap().token, "pt");
+    assert_eq!(status(bob.provider_token(mine.id).await), 403);
+    assert_eq!(status(admin.provider_token(mine.id).await), 403);
+    assert_eq!(status(worker.provider_token(mine.id).await), 403);
+    assert_eq!(status(alice.provider_token(99).await), 404);
 
     // Only the owner edits url and token.
     assert_eq!(status(bob.update_provider(mine.id, &UpdateProvider { url: Some("http://x".into()), ..Default::default() }).await), 403);
@@ -67,6 +75,7 @@ async fn developers_add_list_update_and_remove_their_own_providers() {
     assert_eq!(status(alice.update_provider(99, &UpdateProvider { url: Some("http://x".into()), ..Default::default() }).await), 404);
     let updated = alice.update_provider(mine.id, &UpdateProvider { url: Some("http://elsewhere:9001/".into()), token: Some("pt2".into()) }).await.unwrap();
     assert_eq!(updated.url, "http://elsewhere:9001/");
+    assert_eq!(alice.provider_token(mine.id).await.unwrap().token, "pt2");
 
     // The owner or the admin removes.
     assert_eq!(status(bob.delete_provider(mine.id).await), 403);

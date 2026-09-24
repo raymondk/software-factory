@@ -360,6 +360,27 @@ async fn unreachable_provider_is_skipped_for_the_pass() {
     let workers = s.workers().await;
     assert_eq!((workers.len(), workers[0].2), (1, id("b")));
     assert_eq!(s.fake("b").starts.len(), 1);
+    // Each check is recorded: `b` answered now, `a` never did and says why.
+    let health = s.providers.health.read().unwrap().clone();
+    let b = &health[&id("b")];
+    assert!(b.last_seen.as_deref().is_some_and(|t| t.ends_with('Z')) && b.last_error.is_none(), "{b:?}");
+    let a = &health[&id("a")];
+    assert!(a.last_seen.is_none() && a.last_error.as_deref().is_some_and(|e| e.contains("provider status")), "{a:?}");
+}
+
+#[tokio::test]
+async fn a_provider_that_stops_answering_keeps_its_last_seen_and_records_the_error() {
+    let s = setup(10).await;
+    s.tick().await.unwrap();
+    let seen = s.providers.health.read().unwrap()[&id("a")].last_seen.clone();
+    assert!(seen.is_some());
+    sqlx::query("UPDATE providers SET url = 'http://127.0.0.1:1' WHERE id = ?1").bind(id("a")).execute(&s.pool).await.unwrap();
+    s.tick().await.unwrap();
+    let a = s.providers.health.read().unwrap()[&id("a")].clone();
+    assert_eq!(a.last_seen, seen);
+    assert!(a.last_error.is_some(), "{a:?}");
+    // The last status is kept too: nothing but health tells the two apart.
+    assert!(s.providers.statuses.read().unwrap().contains_key(&id("a")));
 }
 
 #[tokio::test]

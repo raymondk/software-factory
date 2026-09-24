@@ -2,6 +2,7 @@ import { useRef, useState } from "preact/hooks";
 import { api } from "./api.js";
 import { useApp } from "./context.js";
 import { Header } from "./Header.jsx";
+import { MyProviders } from "./MyProviders.jsx";
 
 const Rows = ({ rows }) => (
   <dl>{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
@@ -20,9 +21,10 @@ const Panes = ({ config: c }) => (
 );
 
 // The cog at the top right opens the running configuration (GET /config; the token never leaves the orchestrator)
-// read-only in a modal, fetched each time it opens.
-export function ConfigDialog() {
-  const { showError } = useApp();
+// read-only in a modal, fetched each time it opens, and below it the developer's own providers (not the admin's: they
+// have none).
+export function ConfigDialog({ providers }) {
+  const { showError, me } = useApp();
   const dialog = useRef();
   const [config, setConfig] = useState(null);
   const open = async () => {
@@ -38,7 +40,10 @@ export function ConfigDialog() {
     </button>
     <dialog id="config" ref={dialog} onClick={e => e.target === e.currentTarget && e.currentTarget.close()}>
       <Header kind="Orchestrator" title="Configuration" onClose={() => dialog.current.close()} />
-      <div class="scroll" tabindex={-1} autofocus>{config ? <Panes config={config} /> : <span class="empty">Loading…</span>}</div>
+      <div class="scroll" tabindex={-1} autofocus>
+        {config ? <Panes config={config} /> : <span class="empty">Loading…</span>}
+        {!me.admin && <MyProviders providers={providers} />}
+      </div>
     </dialog>
   </>);
 }

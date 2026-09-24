@@ -40,6 +40,7 @@ pub fn router(state: AppState) -> Router {
         .route("/agents", get(agents))
         .route("/providers", get(provider::list).post(provider::create))
         .route("/providers/{id}", patch(provider::update).delete(provider::delete))
+        .route("/providers/{id}/token", get(provider::token))
         .route("/config", get(config))
         .route("/me", get(users::me))
         .route("/users", get(users::list))

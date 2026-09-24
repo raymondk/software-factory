@@ -1,11 +1,12 @@
 //! Worker providers (spec 5): developer-owned, kept in the database. The client that talks to one, the last status
-//! each returned, and the `/providers` endpoints.
+//! each returned and how its last check went, and the `/providers` endpoints.
 
 use std::collections::BTreeMap;
 use std::sync::RwLock;
+use std::time::SystemTime;
 
 use anyhow::Context;
-pub use api_client::{AgentInfo, ProviderStatus as Status, ProviderWorker};
+pub use api_client::{AgentInfo, ProviderStatus as Status, ProviderToken, ProviderWorker};
 use api_client::{CreateProvider, UpdateProvider};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -57,36 +58,64 @@ impl Provider {
     }
 }
 
-/// The last status every provider returned, by id. The scheduler refreshes it; the API validates ticket agents and
-/// models and filters polls against it.
+/// How a provider's last check went: when it last answered, and the error if the last check failed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Health {
+    pub last_seen: Option<String>,
+    pub last_error: Option<String>,
+}
+
+/// The last status every provider returned, by id, and how its last check went. The scheduler refreshes both; the
+/// API validates ticket agents and models and filters polls against the statuses.
 pub struct Providers {
     pool: SqlitePool,
     pub statuses: RwLock<BTreeMap<i64, Status>>,
+    pub health: RwLock<BTreeMap<i64, Health>>,
 }
 
 impl Providers {
     pub fn new(pool: SqlitePool) -> Providers {
-        Providers { pool, statuses: RwLock::new(BTreeMap::new()) }
+        Providers { pool, statuses: RwLock::new(BTreeMap::new()), health: RwLock::new(BTreeMap::new()) }
     }
 
-    /// Loads every provider and asks each for its status, remembering each answer and forgetting removed providers.
-    /// Returns a client per provider and the statuses of those that answered this time.
+    /// Loads every provider and asks each for its status, remembering each answer and how each check went, and
+    /// forgetting removed providers. Returns a client per provider and the statuses of those that answered this time.
     pub async fn refresh(&self) -> sqlx::Result<(BTreeMap<i64, Provider>, BTreeMap<i64, Status>)> {
         let rows: Vec<(i64, String, String)> = sqlx::query_as("SELECT id, url, token FROM providers ORDER BY id").fetch_all(&self.pool).await?;
         let clients: BTreeMap<i64, Provider> = rows.into_iter().map(|(id, url, token)| (id, Provider::new(&url, &token))).collect();
         let mut fresh = BTreeMap::new();
+        let mut errors = BTreeMap::new();
         for (id, client) in &clients {
             match client.status().await {
                 Ok(status) => {
                     fresh.insert(*id, status);
                 }
-                Err(e) => warn!(provider = id, url = %client.url, "provider did not answer: {e:#}"),
+                Err(e) => {
+                    warn!(provider = id, url = %client.url, "provider did not answer: {e:#}");
+                    errors.insert(*id, format!("{e:#}"));
+                }
             }
         }
+        let now = humantime::format_rfc3339_millis(SystemTime::now()).to_string();
+        let mut health = self.health.write().unwrap();
+        health.retain(|id, _| clients.contains_key(id));
+        for id in clients.keys() {
+            let h = health.entry(*id).or_default();
+            match errors.remove(id) {
+                None => *h = Health { last_seen: Some(now.clone()), last_error: None },
+                Some(e) => h.last_error = Some(e),
+            }
+        }
+        drop(health);
         let mut statuses = self.statuses.write().unwrap();
         statuses.retain(|id, _| clients.contains_key(id));
         statuses.extend(fresh.clone());
         Ok((clients, fresh))
+    }
+
+    /// What `GET /providers` says about provider `id`: its last status and how its last check went.
+    fn describe(&self, id: i64) -> (Option<Status>, Health) {
+        (self.statuses.read().unwrap().get(&id).cloned(), self.health.read().unwrap().get(&id).cloned().unwrap_or_default())
     }
 
     /// The ids of `owner`'s providers.
@@ -150,8 +179,19 @@ pub(crate) struct Row {
 const COLUMNS: &str = "id, owner, name, url, token, created_at";
 
 impl Row {
-    fn into_api(self, status: Option<Status>) -> api_client::Provider {
-        api_client::Provider { id: self.id, owner: self.owner, name: self.name, url: self.url, created_at: self.created_at, status }
+    fn into_api(self, (status, health): (Option<Status>, Health)) -> api_client::Provider {
+        let reachable = health.last_seen.is_some() && health.last_error.is_none();
+        api_client::Provider {
+            id: self.id,
+            owner: self.owner,
+            name: self.name,
+            url: self.url,
+            created_at: self.created_at,
+            status,
+            reachable,
+            last_seen: health.last_seen,
+            last_error: health.last_error,
+        }
     }
 }
 
@@ -160,11 +200,19 @@ async fn row(state: &AppState, id: i64) -> Result<Row, ApiError> {
     row.ok_or(ApiError::NotFound)
 }
 
-/// Every provider with its last status; never the token.
+/// Every provider with its last status and health; never the token.
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<api_client::Provider>>, ApiError> {
     let rows: Vec<Row> = sqlx::query_as(&format!("SELECT {COLUMNS} FROM providers ORDER BY id")).fetch_all(&state.pool).await?;
-    let statuses = state.providers.statuses.read().unwrap();
-    Ok(Json(rows.into_iter().map(|r| { let status = statuses.get(&r.id).cloned(); r.into_api(status) }).collect()))
+    Ok(Json(rows.into_iter().map(|r| { let described = state.providers.describe(r.id); r.into_api(described) }).collect()))
+}
+
+/// The token, to the owner only: it has to be shared with the provider's operator. 403 to everyone else, the admin included.
+pub async fn token(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<i64>) -> Result<Json<ProviderToken>, ApiError> {
+    let current = row(&state, id).await?;
+    if !matches!(&caller, Caller::User { principal, .. } if *principal == current.owner) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(ProviderToken { token: current.token }))
 }
 
 /// A developer adds a provider of their own; `name` is unique per owner.
@@ -188,7 +236,7 @@ pub async fn create(
     match row {
         Ok(row) => {
             info!(provider = row.id, name = %row.name, url = %row.url, owner = %row.owner, "provider added");
-            Ok((StatusCode::CREATED, Json(row.into_api(None))))
+            Ok((StatusCode::CREATED, Json(row.into_api((None, Health::default())))))
         }
         Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Err(ApiError::Conflict("you already have a provider by that name")),
         Err(e) => Err(e.into()),
@@ -212,8 +260,8 @@ pub async fn update(
         .bind(&req.token)
         .fetch_one(&state.pool)
         .await?;
-    let status = state.providers.statuses.read().unwrap().get(&id).cloned();
-    Ok(Json(row.into_api(status)))
+    let described = state.providers.describe(id);
+    Ok(Json(row.into_api(described)))
 }
 
 /// Owner or admin. Stops the provider's workers and deletes their records.
@@ -257,5 +305,6 @@ pub(crate) async fn remove(state: &AppState, provider: Row) -> Result<(), ApiErr
     sqlx::query("DELETE FROM providers WHERE id = ?1").bind(provider.id).execute(&mut *tx).await?;
     tx.commit().await?;
     state.providers.statuses.write().unwrap().remove(&provider.id);
+    state.providers.health.write().unwrap().remove(&provider.id);
     Ok(())
 }

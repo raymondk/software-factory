@@ -226,10 +226,10 @@ test("opens the configuration read-only from the cog, without the token", async 
   await expect(dialog).toBeHidden();
   await page.click("#settings");
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator(".panel h3")).toHaveText(["Project", "Orchestrator", "Scheduler", "Agents", "Prompts"]);
+  await expect(dialog.locator(".config .panel h3")).toHaveText(["Project", "Orchestrator", "Scheduler", "Agents", "Prompts"]);
   await expect(dialog).toContainText("{{ticket.id}}");
   await expect(dialog).not.toContainText(TOKEN);
-  await expect(dialog.locator("input, textarea, select, form")).toHaveCount(0);
+  await expect(dialog.locator(".config").locator("input, textarea, select, form")).toHaveCount(0);
   const repo = dialog.locator("a", { hasText: "repo-a" });
   await expect(repo).toHaveAttribute("href", "https://github.com/org/repo-a.git");
   await expect(repo).toHaveAttribute("target", "_blank");
@@ -237,7 +237,7 @@ test("opens the configuration read-only from the cog, without the token", async 
   await expect(dialog).toBeHidden();
 });
 
-test("lists every developer's providers with status; the developer adds and removes their own", async ({ page, server }) => {
+test("lists every developer's providers with health on the board; the developer manages their own under the cog", async ({ page, server }) => {
   await page.goto("/");
   const rows = page.locator("#providers tr");
   await expect(rows).toHaveCount(1);
@@ -246,14 +246,30 @@ test("lists every developer's providers with status; the developer adds and remo
   await expect(rows.first()).toContainText("0 / 0");
   await expect(rows.first()).toContainText("claude-code");
   await expect(rows.first()).toContainText("sonnet, opus");
+  await expect(rows.first().locator(".health")).toHaveText("reachable");
+  await expect(rows.first()).toContainText("answered just now");
   await expect(rows.first().locator("a")).toHaveAttribute("href", /\/status$/);
+  // The board is read-only: no form there.
+  await expect(page.locator("#providers-section form")).toHaveCount(0);
+
+  await page.click("#settings");
+  const mine = page.locator("#my-providers");
+  await expect(mine.locator("tbody tr")).toHaveCount(1);
+  // The token is revealed on click and hidden again.
+  const fake = mine.locator("tbody tr", { hasText: "fake" });
+  await expect(fake.locator(".token code")).toHaveText("••••••••");
+  await fake.locator("button[aria-label='Reveal token']").click();
+  await expect(fake.locator(".token code")).toHaveText("x");
+  await fake.locator("button[aria-label='Hide token']").click();
+  await expect(fake.locator(".token code")).toHaveText("••••••••");
+
   await page.fill("#add-provider input[name=name]", "spare");
   await page.fill("#add-provider input[name=url]", "http://127.0.0.1:1");
   await page.fill("#add-provider input[name=token]", "s3cret");
   await page.click("#add-provider button:text-is('Add provider')");
-  const spare = page.locator("#providers tr", { hasText: "spare" });
-  await expect(spare).toContainText("no status yet");
-  expect(await page.locator("#providers-section").textContent()).not.toContain("s3cret");
+  const spare = mine.locator("tbody tr", { hasText: "spare" });
+  await expect(spare).toBeVisible();
+  expect(await mine.textContent()).not.toContain("s3cret");
   const listed = await server.api("/providers");
   expect(listed.map(p => [p.name, p.owner])).toEqual([["fake", "dev-principal"], ["spare", "dev-principal"]]);
   // A duplicate name is refused inline.
@@ -261,10 +277,35 @@ test("lists every developer's providers with status; the developer adds and remo
   await page.fill("#add-provider input[name=url]", "http://127.0.0.1:2");
   await page.fill("#add-provider input[name=token]", "x");
   await page.click("#add-provider button:text-is('Add provider')");
-  await expect(page.locator("#providers-section .error")).toContainText("already have a provider");
+  await expect(mine.locator(".error")).toContainText("already have a provider");
+  // Editing url and token, as the owner.
+  await spare.locator("button:text-is('Edit')").click();
+  await spare.locator("input[name=url]").fill("http://127.0.0.1:3");
+  await spare.locator("input[name=token]").fill("rotated");
+  await spare.locator("button:text-is('Save')").click();
+  await expect(spare).toContainText("http://127.0.0.1:3");
+  await spare.locator("button[aria-label='Reveal token']").click();
+  await expect(spare.locator(".token code")).toHaveText("rotated");
+  await page.keyboard.press("Escape");
+  // On the board, the spare one is unreachable once the scheduler has tried it, and says so.
+  const spareRow = page.locator("#providers tr", { hasText: "spare" });
+  await expect(spareRow).toContainText("no status yet");
+  await expect(spareRow.locator(".health")).toHaveText("unreachable", { timeout: 10000 });
+  await expect(spareRow).toContainText("never answered");
   page.once("dialog", d => d.accept());
-  await spare.locator("button:text-is('Remove')").click();
+  await spareRow.locator("button:text-is('Remove')").click();
   await expect(rows).toHaveCount(1);
+});
+
+test("the admin sees every provider's health and removes any, but has none to manage", async ({ page, server }) => {
+  await signedInAs(page, TOKEN);
+  await page.goto("/");
+  const rows = page.locator("#providers tr");
+  await expect(rows.first().locator(".health")).toHaveText("reachable");
+  await expect(rows.first().locator("button:text-is('Remove')")).toBeVisible();
+  await page.click("#settings");
+  await expect(page.locator("#config")).toBeVisible();
+  await expect(page.locator("#my-providers")).toHaveCount(0);
 });
 
 test("shows a worker in the Workers panel", async ({ page, server }) => {
