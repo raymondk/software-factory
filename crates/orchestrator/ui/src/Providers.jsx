@@ -1,5 +1,4 @@
-import { useApp, useBusy } from "./context.js";
-import { api } from "./api.js";
+import { useApp } from "./context.js";
 import { ago, userName } from "./format.js";
 
 // Reachable or not, and when it last answered. The last status is kept while a provider is away, so this tells them apart.
@@ -11,20 +10,13 @@ export const Health = ({ p }) => {
     : <><span class="health down" title={p.last_error}>unreachable</span> {seen}</>;
 };
 
-// Removes a provider, after confirming; for its owner and the admin, wherever it is listed.
-export const RemoveButton = ({ p }) => {
-  const { refresh, me } = useApp();
-  const busy = useBusy();
-  const remove = busy(async () => {
-    if (!confirm(`Remove provider ${p.name}? Its workers are stopped.`)) return;
-    await api(`/providers/${p.id}`, { method: "DELETE" });
-    await refresh();
-  });
-  return (p.owner === me.principal || me.admin) ? <button onClick={remove}>Remove</button> : null;
-};
+// The agents a provider advertises, each with its models, the default marked.
+export const Agents = ({ status }) => status && Object.entries(status.agents).map(([a, info]) => (
+  <div key={a}>{a} <span class="empty">{info.models.map((m, i) => <span key={m}>{i > 0 && ", "}{m === info.default_model ? <b title="default model">{m}</b> : m}</span>)}</span></div>
+));
 
 // Every developer's providers with health, workers and what they advertise, refreshed with the board's poll. Read-only:
-// a developer adds and edits their own under the cog.
+// adding, editing and removing happen under the cog.
 export function Providers({ providers }) {
   const { users, me } = useApp();
   return (
@@ -33,7 +25,7 @@ export function Providers({ providers }) {
       <div class="panel">
         {providers.length === 0 ? <p class="empty">No providers yet</p> : (
           <table>
-            <thead><tr><th>Name</th><th>Owner</th><th>URL</th><th>Health</th><th>Workers</th><th>Agents</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Owner</th><th>URL</th><th>Health</th><th>Workers</th><th>Agents</th></tr></thead>
             <tbody id="providers">
               {providers.map(p => (
                 <tr key={p.id} class={p.owner === me.principal ? "mine" : undefined}>
@@ -42,8 +34,7 @@ export function Providers({ providers }) {
                   <td><a href={p.url.replace(/\/+$/, "") + "/status"} target="_blank" rel="noopener">{p.url}</a></td>
                   <td><Health p={p} /></td>
                   <td>{p.status ? `${p.status.in_use} / ${p.status.capacity}` : <span class="empty">no status yet</span>}</td>
-                  <td>{p.status && Object.entries(p.status.agents).map(([a, info]) => <div key={a}>{a} <span class="empty">{info.models.join(", ")}</span></div>)}</td>
-                  <td class="row"><RemoveButton p={p} /></td>
+                  <td><Agents status={p.status} /></td>
                 </tr>
               ))}
             </tbody>

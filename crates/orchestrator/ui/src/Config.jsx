@@ -21,10 +21,9 @@ const Panes = ({ config: c }) => (
 );
 
 // The cog at the top right opens the running configuration (GET /config; the token never leaves the orchestrator)
-// read-only in a modal, fetched each time it opens, and below it the developer's own providers (not the admin's: they
-// have none).
+// read-only in a modal, fetched each time it opens, and below it the providers the caller manages.
 export function ConfigDialog({ providers }) {
-  const { showError, me } = useApp();
+  const { showError } = useApp();
   const dialog = useRef();
   const [config, setConfig] = useState(null);
   const open = async () => {
@@ -42,7 +41,7 @@ export function ConfigDialog({ providers }) {
       <Header kind="Orchestrator" title="Configuration" onClose={() => dialog.current.close()} />
       <div class="scroll" tabindex={-1} autofocus>
         {config ? <Panes config={config} /> : <span class="empty">Loading…</span>}
-        {!me.admin && <MyProviders providers={providers} />}
+        <MyProviders providers={providers} />
       </div>
     </dialog>
   </>);

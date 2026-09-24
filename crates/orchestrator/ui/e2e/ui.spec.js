@@ -246,11 +246,12 @@ test("lists every developer's providers with health on the board; the developer 
   await expect(rows.first()).toContainText("0 / 0");
   await expect(rows.first()).toContainText("claude-code");
   await expect(rows.first()).toContainText("sonnet, opus");
+  await expect(rows.first().locator("b[title='default model']")).toHaveText(["sonnet", "o3"]);
   await expect(rows.first().locator(".health")).toHaveText("reachable");
   await expect(rows.first()).toContainText("answered just now");
   await expect(rows.first().locator("a")).toHaveAttribute("href", /\/status$/);
-  // The board is read-only: no form there.
-  await expect(page.locator("#providers-section form")).toHaveCount(0);
+  // The board is read-only: no form and no button there.
+  await expect(page.locator("#providers-section form, #providers-section button")).toHaveCount(0);
 
   await page.click("#settings");
   const mine = page.locator("#my-providers");
@@ -292,20 +293,28 @@ test("lists every developer's providers with health on the board; the developer 
   await expect(spareRow).toContainText("no status yet");
   await expect(spareRow.locator(".health")).toHaveText("unreachable", { timeout: 10000 });
   await expect(spareRow).toContainText("never answered");
+  await page.click("#settings");
   page.once("dialog", d => d.accept());
-  await spareRow.locator("button:text-is('Remove')").click();
+  await spare.locator("button:text-is('Remove')").click();
   await expect(rows).toHaveCount(1);
 });
 
-test("the admin sees every provider's health and removes any, but has none to manage", async ({ page, server }) => {
+test("the admin sees every provider's health on the board and removes any under the cog", async ({ page, server }) => {
+  await server.api("/providers", { method: "POST", token: server.dev, body: { name: "doomed", url: "http://127.0.0.1:1", token: "x" } });
   await signedInAs(page, TOKEN);
   await page.goto("/");
   const rows = page.locator("#providers tr");
+  await expect(rows).toHaveCount(2);
   await expect(rows.first().locator(".health")).toHaveText("reachable");
-  await expect(rows.first().locator("button:text-is('Remove')")).toBeVisible();
+  await expect(page.locator("#providers-section button")).toHaveCount(0);
   await page.click("#settings");
-  await expect(page.locator("#config")).toBeVisible();
-  await expect(page.locator("#my-providers")).toHaveCount(0);
+  const mine = page.locator("#my-providers");
+  await expect(mine.locator("tbody tr")).toHaveCount(2);
+  await expect(mine.locator("form, .token")).toHaveCount(0);
+  page.once("dialog", d => d.accept());
+  await mine.locator("tbody tr", { hasText: "doomed" }).locator("button:text-is('Remove')").click();
+  await expect(mine.locator("tbody tr")).toHaveCount(1);
+  await expect(rows).toHaveCount(1);
 });
 
 test("shows a worker in the Workers panel", async ({ page, server }) => {

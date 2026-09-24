@@ -1,7 +1,8 @@
 import { useState } from "preact/hooks";
 import { api } from "./api.js";
 import { useApp, useBusy } from "./context.js";
-import { Health, RemoveButton } from "./Providers.jsx";
+import { userName } from "./format.js";
+import { Health } from "./Providers.jsx";
 
 const Eye = ({ off }) => (
   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -23,6 +24,19 @@ function Token({ p }) {
       <button class="icon" aria-label={token ? "Hide token" : "Reveal token"} title={token ? "Hide token" : "Reveal token"} onClick={toggle}><Eye off={!!token} /></button>
     </span>
   );
+}
+
+// Removes a provider, after confirming; for its owner and the admin.
+function RemoveButton({ p, onError }) {
+  const { refresh } = useApp();
+  const busy = useBusy(onError);
+  const remove = busy(async () => {
+    if (!confirm(`Remove provider ${p.name}? Its workers are stopped.`)) return;
+    onError(null);
+    await api(`/providers/${p.id}`, { method: "DELETE" });
+    await refresh();
+  });
+  return <button onClick={remove}>Remove</button>;
 }
 
 // One of the developer's providers: shown, or being edited (url and token; an empty token keeps the current one).
@@ -56,16 +70,32 @@ function Mine({ p, onError }) {
       <td>{p.name}</td>
       <td>{p.url}</td>
       <td><Token p={p} /></td>
-      <td class="row"><Health p={p} /><button onClick={() => { onError(null); setEditing(true); }}>Edit</button><RemoveButton p={p} /></td>
+      <td class="row"><Health p={p} /><button onClick={() => { onError(null); setEditing(true); }}>Edit</button><RemoveButton p={p} onError={onError} /></td>
     </tr>
   );
 }
 
-// The signed-in developer's own providers, under the cog: add, edit url and token, reveal the token, remove.
+// Under the cog. For a developer, their own providers: add, edit url and token, reveal the token, remove. For the
+// admin, who has none, every provider, to remove.
 export function MyProviders({ providers }) {
-  const { refresh, me } = useApp();
+  const { refresh, me, users } = useApp();
   const [error, setError] = useState(null);
   const busy = useBusy(m => setError(m));
+  if (me.admin) return (
+    <div id="my-providers" class="panel">
+      <h3>Providers</h3>
+      {providers.length === 0 ? <p class="empty">No providers yet</p> : (
+        <table>
+          <thead><tr><th>Name</th><th>Owner</th><th>URL</th><th></th></tr></thead>
+          <tbody>{providers.map(p => (
+            <tr key={p.id}><td>{p.name}</td><td><span title={p.owner}>{userName(users, p.owner)}</span></td><td>{p.url}</td>
+              <td class="row"><RemoveButton p={p} onError={setError} /></td></tr>
+          ))}</tbody>
+        </table>
+      )}
+      {error && <div class="error">{error}</div>}
+    </div>
+  );
   const add = busy(async e => {
     e.preventDefault();
     const form = e.currentTarget;

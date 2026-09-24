@@ -113,14 +113,15 @@ summary { cursor: pointer; margin-bottom: .5rem; }
 .log { font: 12px/1.45 var(--mono); background: var(--icp-bg-sunk); color: var(--icp-fg); padding: .6rem .75rem; margin: .5rem 0 0; max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 #metrics-section, #workers-section, #providers-section { margin-top: 2.5rem; }
 #providers td:nth-child(3), #providers td:nth-child(5) { font: 13px var(--mono); }
-#providers td.row, #my-providers td.row { justify-content: flex-end; }
+#my-providers td.row { justify-content: flex-end; }
+#providers b { font-weight: 500; color: var(--icp-fg-secondary); }
 .health { font: 500 11px var(--sans); letter-spacing: 0.1em; text-transform: uppercase; }
 .health.up { color: var(--icp-indicator-teal); }
 .health.down { color: var(--icp-accent); }
 #add-provider { margin: 1rem 0 0; justify-content: flex-start; }
 #add-provider input, .edit-provider input { flex: 1; min-width: 0; }
 #my-providers { margin-top: 1.25rem; }
-#my-providers td:nth-child(2), .token code { font: 13px var(--mono); }
+#my-providers td:nth-child(2), #my-providers td:nth-child(3), .token code { font: 13px var(--mono); }
 .token { display: inline-flex; gap: .4rem; align-items: center; }
 button.icon { width: 1.75rem; height: 1.75rem; padding: 0; border: 0; border-radius: 50%; display: inline-grid; place-items: center; color: var(--icp-fg-secondary); }
 button.icon:hover { color: var(--icp-fg); }
