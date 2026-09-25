@@ -78,6 +78,12 @@ const card = (page, id) => page.locator(`.card[data-id="${id}"]`);
 const create = (server, title) => server.api("/tickets", { method: "POST", body: { title } });
 const ids = async (server, ...want) => (await server.api("/tickets")).map(t => t.id).filter(id => want.includes(id));
 
+test("heads the board with the project name", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#project")).toHaveText("my-project");
+  await expect(page).toHaveTitle("my-project · Software Factory");
+});
+
 test("creates a ticket from the dialog", async ({ page, server }) => {
   await page.goto("/");
   await page.click("button:text-is('New ticket')");
