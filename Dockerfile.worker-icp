@@ -1,0 +1,55 @@
+# Worker image with the ICP toolchain: Rust (wasm32), Motoko (moc), mops, icp-cli.
+# Build: scripts/worker-icp-image.sh. BASE_IMAGE is the base worker image of the same release.
+ARG BASE_IMAGE=ghcr.io/raymondk/software-factory/worker:latest
+FROM ${BASE_IMAGE}
+
+ARG MOTOKO_VERSION=1.16.1
+ARG ICP_CLI_VERSION=1.5.0
+ARG RUST_VERSION=stable
+
+USER root
+
+# Native toolchain for Rust crates with C dependencies (ring, openssl-sys, ...).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential pkg-config libssl-dev xz-utils jq libdbus-1-3 \
+ && rm -rf /var/lib/apt/lists/*
+
+# moc / mo-doc, from the Motoko release tarball.
+RUN arch="$(uname -m)" \
+ && case "$arch" in x86_64) moarch=x86_64 ;; aarch64) moarch=aarch64 ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac \
+ && curl -fsSL "https://github.com/dfinity/motoko/releases/download/${MOTOKO_VERSION}/motoko-Linux-${moarch}-${MOTOKO_VERSION}.tar.gz" \
+    | tar -xz -C /usr/local/bin ./moc ./mo-doc \
+ && moc --version
+
+# icp-cli.
+RUN arch="$(uname -m)" \
+ && case "$arch" in x86_64) triple=x86_64-unknown-linux-gnu ;; aarch64) triple=aarch64-unknown-linux-gnu ;; *) echo "unsupported arch: $arch" >&2; exit 1 ;; esac \
+ && curl -fsSL "https://github.com/dfinity/icp-cli/releases/download/v${ICP_CLI_VERSION}/icp-cli-${triple}.tar.xz" \
+    | tar -xJ -C /tmp \
+ && install -m 0755 "/tmp/icp-cli-${triple}/icp" /usr/local/bin/icp \
+ && rm -rf "/tmp/icp-cli-${triple}" \
+ && icp --version
+
+# Motoko package manager.
+RUN npm install -g ic-mops && mops --version
+
+USER node
+ENV RUSTUP_HOME=/home/node/.rustup \
+    CARGO_HOME=/home/node/.cargo \
+    PATH=/home/node/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Rust, minimal profile plus the bits agents actually reach for, and the canister target.
+RUN curl -fsSL https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --profile minimal \
+        --default-toolchain "${RUST_VERSION}" \
+        --component clippy --component rustfmt \
+        --target wasm32-unknown-unknown \
+ && rustc --version && cargo --version
+
+# Generates .did files from Rust canisters.
+RUN cargo install --locked candid-extractor \
+ && cargo install wasm-pack \
+ && rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git"
+
+WORKDIR /workspace
+ENTRYPOINT ["worker"]

@@ -33,6 +33,9 @@ push the tag. The release workflow takes that version's section as the release n
 
 - `docs/provider.md`: how to run a provider and register it, with prerequisites.
 
+- ICP worker image (`worker-icp`): the base image plus Rust with `wasm32`, Motoko, mops and `icp-cli`, published with each
+  release; `scripts/worker-icp-image.sh` builds it locally.
+
 ### Changed
 
 - The worker image copies prebuilt `worker` and `factory` binaries instead of compiling from source;

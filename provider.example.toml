@@ -4,7 +4,8 @@ max_workers = 4
 token = "change-me"   # the orchestrator sends this to start and stop workers
 
 [agents.claude-code]
-image = "software-factory/worker:latest"
+image = "ghcr.io/raymondk/software-factory/worker:latest"   # pin the release you run, e.g. :v0.1.0
+# image = "ghcr.io/raymondk/software-factory/worker-icp:latest"   # same, plus Rust/wasm32, Motoko, mops and icp-cli for canister projects
 models = ["sonnet", "opus"]
 default_model = "sonnet"
 

@@ -29,7 +29,7 @@ Download the tarball for your architecture from the release, check it, and put t
 Pull the worker image of the same version. `worker` is the base image; `worker-icp` adds the ICP toolchain (Rust with
 `wasm32`, Motoko, mops, `icp-cli`) for canister projects:
 
-    docker pull ghcr.io/raymondk/software-factory/worker:vX.Y.Z
+    docker pull ghcr.io/raymondk/software-factory/worker:vX.Y.Z        # or worker-icp:vX.Y.Z
 
 Keep the provider, the image and the orchestrator on the same release: a worker that cannot decode the orchestrator's
 responses exits at once, and the Providers view shows each provider's and worker's version so a stale one stands out.

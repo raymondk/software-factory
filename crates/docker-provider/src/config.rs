@@ -97,7 +97,7 @@ mod tests {
         assert_eq!(c.provider.max_workers, 4);
         assert_eq!(c.provider.token, "change-me");
         let agent = &c.agents["claude-code"];
-        assert_eq!(agent.image, "software-factory/worker:latest");
+        assert_eq!(agent.image, "ghcr.io/raymondk/software-factory/worker:latest");
         assert_eq!((agent.models.as_slice(), agent.default_model.as_str()), (["sonnet".to_string(), "opus".to_string()].as_slice(), "sonnet"));
         assert_eq!(c.worker_env["GIT_TOKEN"], "change-me");
     }
