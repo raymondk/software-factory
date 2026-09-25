@@ -21,7 +21,7 @@ run_timeout = "1h"
 ready = """
 You are working on ticket {{ticket.id}}: {{ticket.title}}.
 Read the ticket and its comments with the factory CLI.
-Move the ticket to in_progress, implement the change, open a pull request,
+Move the ticket to in_progress, implement the change, note it in the changelog if the repo has one, open a pull request,
 add its URL to the ticket, and move the ticket to in_review.
 """
 in_progress = """

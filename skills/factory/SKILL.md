@@ -11,7 +11,7 @@ Your ticket id is `$FACTORY_TICKET`. `factory` is pre-configured (`FACTORY_URL`,
 2. Start: `factory ticket edit $FACTORY_TICKET --state in_progress`
 3. Repo URLs are in `$FACTORY_REPOS` (space-separated). Each repo lives at `/workspace/<name>`, where `<name>` is the last path segment of its URL without `.git` (`https://github.com/org/app.git` → `/workspace/app`). If that directory exists, reuse it (`git fetch`, check for an existing branch or PR with `gh pr list --head <branch>`); otherwise `git clone <url> /workspace/<name>`. Never clone anywhere else: earlier and later runs must find the same paths.
    The Bash cwd persists between calls. Run `pwd` before `cd`; a `cd <name>` from inside the clone fails. Prefer absolute paths.
-4. Work on a branch, push it, open a PR: `gh pr create --title "..." --body "..."`
+4. Work on a branch. If the repo has a `CHANGELOG.md`, add a line under `Unreleased` for any change in behaviour. Push and open a PR: `gh pr create --title "..." --body "..."`
 5. Record the PR: `factory ticket edit $FACTORY_TICKET --add-link <pr-url>`
 6. Finish, last: `factory ticket edit $FACTORY_TICKET --state in_review`. A state change releases the ticket: after it you no longer hold it, and further edits are refused with `403 … does not hold ticket`. Make every comment and link before the final state change.
 
