@@ -31,6 +31,8 @@ push the tag. The release workflow takes that version's section as the release n
   the UI shows it in the header and under the cog. Providers report theirs in `GET /status` and workers when they register,
   both shown on the board and on runs.
 
+- `docs/provider.md`: how to run a provider and register it, with prerequisites.
+
 ### Changed
 
 - The worker image copies prebuilt `worker` and `factory` binaries instead of compiling from source;

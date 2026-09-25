@@ -54,6 +54,10 @@ The orchestrator and the provider log to stderr with timestamps and levels. `RUS
 default) covers requests that change something, worker and run lifecycle, ticket state changes, and provider
 start/stop; `RUST_LOG=debug` adds every request, heartbeats, polls, scheduler ticks, and each docker command.
 
+## Running a provider
+
+`docs/provider.md`: prerequisites, install, configuration, running, registering it with the orchestrator, and troubleshooting.
+
 ## Releases
 
 Pushing a tag `vX.Y.Z` (matching `version` in `Cargo.toml`, with a section in `CHANGELOG.md`) runs `.github/workflows/release.yml`:
