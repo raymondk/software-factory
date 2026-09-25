@@ -1,6 +1,3 @@
-target
-.git
-*.db
-*.secrets.toml
-*.db-*
-factory-workspace
+*
+!dist
+!skills/factory

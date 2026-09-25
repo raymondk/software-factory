@@ -10,6 +10,9 @@
 # Rust
 /target
 
+# Binaries staged for the worker image
+/dist
+
 # A Worker's Workspace, when one is run from the repository root
 /factory-workspace
 

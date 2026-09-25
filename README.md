@@ -54,6 +54,13 @@ The orchestrator and the provider log to stderr with timestamps and levels. `RUS
 default) covers requests that change something, worker and run lifecycle, ticket state changes, and provider
 start/stop; `RUST_LOG=debug` adds every request, heartbeats, polls, scheduler ticks, and each docker command.
 
+## Releases
+
+Pushing a tag `vX.Y.Z` (matching `version` in `Cargo.toml`, with a section in `CHANGELOG.md`) runs `.github/workflows/release.yml`:
+binaries for linux x86_64 and aarch64 on a GitHub release, and the worker image at `ghcr.io/raymondk/software-factory/worker:vX.Y.Z`
+(also `latest`). The image copies the released binaries rather than building from source; `scripts/worker-image.sh` builds it locally,
+compiling `worker` and `factory` in a bookworm container so they match the image's glibc.
+
 ## UI
 
 The UI is a Vite + Preact project in `crates/orchestrator/ui/`; `cargo build` runs `npm run build` and embeds the result, so run

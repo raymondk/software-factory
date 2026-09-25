@@ -1,10 +1,7 @@
-FROM rust:1-bookworm AS build
-WORKDIR /src
-COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/src/target \
-    cargo build --release -p worker -p factory && cp target/release/worker target/release/factory /usr/local/bin/
-
+# Worker image. Expects prebuilt binaries at dist/<os>/<arch>/{worker,factory}: scripts/worker-image.sh stages them
+# from a local release build, the release workflow from the release tarballs.
 FROM node:22-bookworm-slim
+ARG TARGETOS TARGETARCH
 # python3, file and xxd: everyday tools agents reach for (scripted edits, checking downloads, hex dumps).
 RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates python3 file xxd \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -12,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/* \
  && npm install -g @anthropic-ai/claude-code
-COPY --from=build /usr/local/bin/worker /usr/local/bin/factory /usr/local/bin/
+COPY dist/${TARGETOS}/${TARGETARCH}/worker dist/${TARGETOS}/${TARGETARCH}/factory /usr/local/bin/
 COPY --chown=node:node skills/factory /home/node/.claude/skills/factory
 RUN mkdir /workspace && chown node:node /workspace
 USER node

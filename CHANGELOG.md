@@ -24,3 +24,11 @@ push the tag. The release workflow takes that version's section as the release n
   metrics, providers, and configuration under a cog.
 - Config: `factory.toml` and `provider.toml`, with a gitignored `<name>.secrets.toml` merged over each.
 - Demo script that runs one ticket end to end, with a kill-and-resume mode.
+- Release workflow: pushing a tag `vX.Y.Z` builds the binaries for linux x86_64 and aarch64, attaches them to a GitHub
+  release with this changelog's section as notes, and publishes the worker image to `ghcr.io/raymondk/software-factory/worker`.
+
+### Changed
+
+- The worker image copies prebuilt `worker` and `factory` binaries instead of compiling from source;
+  `scripts/worker-image.sh` builds it locally.
+- Release binaries are built on Ubuntu 22.04 (glibc 2.35) so they run on Debian bookworm and newer.

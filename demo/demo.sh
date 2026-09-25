@@ -15,7 +15,7 @@ if [ "$agent" != command ] && { [ -z "${GIT_TOKEN:-}" ] || [ -z "${CLAUDE_CODE_O
 fi
 
 cargo build --release -p orchestrator -p docker-provider -p factory
-docker build -t software-factory/worker:latest .
+scripts/worker-image.sh
 export PATH=$PWD/target/release:$PATH
 
 tmp=$(mktemp -d)
