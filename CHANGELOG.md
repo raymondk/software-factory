@@ -7,6 +7,8 @@ push the tag. The release workflow takes that version's section as the release n
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-25
+
 ### Added
 
 - Orchestrator: tickets with states, rank, owner, agent and model, dependencies and relations, comment threads with
