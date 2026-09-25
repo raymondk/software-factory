@@ -3,6 +3,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// This build's version: the crate version, plus `+<short commit>` off a tag or with local changes (see build.rs).
+pub const VERSION: &str = env!("FACTORY_VERSION");
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ticket {
     pub id: i64,
@@ -65,6 +68,9 @@ pub struct Run {
     pub worker_id: String,
     /// The agent the worker runs.
     pub agent: String,
+    /// The version of the worker that ran it.
+    #[serde(default)]
+    pub version: Option<String>,
     /// The model it ran with, recorded by the usage report that ended the run.
     #[serde(default)]
     pub model: Option<String>,
@@ -173,6 +179,9 @@ pub struct ListTickets {
 pub struct Worker {
     pub id: String,
     pub agent: String,
+    /// The worker binary's version, reported when it registered; null before.
+    #[serde(default)]
+    pub version: Option<String>,
     /// The provider running it, by id.
     #[serde(default)]
     pub provider: i64,
@@ -181,6 +190,11 @@ pub struct Worker {
     pub created_at: String,
     pub last_heartbeat: Option<String>,
     pub ticket: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterWorker {
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +233,9 @@ pub struct ProviderWorker {
 /// What a provider reports at `GET /status` (spec 5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderStatus {
+    /// The provider binary's version.
+    #[serde(default)]
+    pub version: Option<String>,
     pub capacity: u32,
     pub in_use: u32,
     #[serde(default)]
@@ -536,8 +553,9 @@ impl Client {
         Self::send(r).await
     }
 
+    /// Registers as alive, reporting this build's version.
     pub async fn register(&self, id: &str) -> Result<Worker, Error> {
-        let r = self.http.post(format!("{}/workers/{id}/register", self.base)).bearer_auth(&self.token);
+        let r = self.http.post(format!("{}/workers/{id}/register", self.base)).bearer_auth(&self.token).json(&RegisterWorker { version: VERSION.into() });
         Self::send(r).await
     }
 

@@ -25,7 +25,7 @@ export function Providers({ providers }) {
       <div class="panel">
         {providers.length === 0 ? <p class="empty">No providers yet</p> : (
           <table>
-            <thead><tr><th>Name</th><th>Owner</th><th>URL</th><th>Health</th><th>Workers</th><th>Agents</th></tr></thead>
+            <thead><tr><th>Name</th><th>Owner</th><th>URL</th><th>Health</th><th>Version</th><th>Workers</th><th>Agents</th></tr></thead>
             <tbody id="providers">
               {providers.map(p => (
                 <tr key={p.id} class={p.owner === me.principal ? "mine" : undefined}>
@@ -33,6 +33,7 @@ export function Providers({ providers }) {
                   <td><span title={p.owner}>{userName(users, p.owner)}</span></td>
                   <td><a href={p.url.replace(/\/+$/, "") + "/status"} target="_blank" rel="noopener">{p.url}</a></td>
                   <td><Health p={p} /></td>
+                  <td>{p.status?.version ?? ""}</td>
                   <td>{p.status ? `${p.status.in_use} / ${p.status.capacity}` : <span class="empty">no status yet</span>}</td>
                   <td><Agents status={p.status} /></td>
                 </tr>

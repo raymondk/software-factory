@@ -67,7 +67,7 @@ impl Fixture {
             .unwrap();
         let providers = Providers::new(pool.clone());
         let agents = [("command".to_string(), AgentInfo { models: vec!["m-default".into(), "m-2".into()], default_model: "m-default".into() })].into();
-        providers.statuses.write().unwrap().insert(1, Status { capacity: 4, in_use: 0, agents, workers: vec![] });
+        providers.statuses.write().unwrap().insert(1, Status { version: None, capacity: 4, in_use: 0, agents, workers: vec![] });
         tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));
         let router = api::router(AppState { pool, config: Arc::new(config), providers: Arc::new(providers) });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -186,8 +186,10 @@ echo '{"tokens_in":100,"tokens_out":20,"cost":0.25}'
         assert!(Instant::now() < deadline, "agent output never shipped: {lines:?}");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    assert!(lines[0].line.starts_with(&format!("worker {wid} (agent command) starting")) && lines[0].run_id.is_none(), "{lines:?}");
+    assert!(lines[0].line.starts_with(&format!("worker {wid} v{} (agent command) starting", api_client::VERSION)) && lines[0].run_id.is_none(), "{lines:?}");
     assert!(lines.iter().any(|l| l.line.contains(&format!("ticket #{id} (ready), run {run}, model m-default")) && l.run_id == Some(run)));
+    let registered = f.human.list_workers().await.unwrap().into_iter().find(|w| w.id == wid).unwrap();
+    assert_eq!(registered.version.as_deref(), Some(api_client::VERSION));
     let of_run = f.human.run_logs(run, None).await.unwrap();
     assert!(of_run.iter().all(|l| l.run_id == Some(run)) && of_run.iter().any(|l| l.line == "working"));
     assert!(f.human.run_logs(run, Some(of_run.last().unwrap().id)).await.unwrap().is_empty());

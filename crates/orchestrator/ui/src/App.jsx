@@ -61,6 +61,7 @@ function Factory({ me, onSignedOut }) {
   const [ticket, setTicket] = useState(null); // the open ticket, in full
   const [error, setError] = useState(null); // { message, fromPoll }
   const [project, setProject] = useState(null); // the project name, from the configuration; read once
+  const [version, setVersion] = useState(null); // the orchestrator version, alongside it
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
 
@@ -94,7 +95,7 @@ function Factory({ me, onSignedOut }) {
   useEffect(() => { if (selected == null) setTicket(null); refresh(); }, [selected, refresh]);
 
   // The heading and the tab carry the project name.
-  useEffect(() => { api("/config").then(c => setProject(c.project.name)).catch(e => showError(e.message)); }, [showError]);
+  useEffect(() => { api("/config").then(c => { setProject(c.project.name); setVersion(c.version); }).catch(e => showError(e.message)); }, [showError]);
   useEffect(() => { if (project) document.title = `${project} · Software Factory`; }, [project]);
 
   // Polls while the tab is visible and refreshes as soon as it becomes visible again.
@@ -139,7 +140,7 @@ function Factory({ me, onSignedOut }) {
   const owners = [...new Set([...users.map(u => u.principal), ...(tickets ?? []).map(t => t.owner).filter(Boolean)])];
   return (
     <Ctx.Provider value={{ refresh, select, showError, users, me }}>
-      <div id="top"><div><span class="tag">Software Factory</span><h1 id="project">{project ?? " "}</h1></div><div class="row"><UserBar me={me} onSignedOut={onSignedOut} /><ConfigDialog providers={providers} /></div></div>
+      <div id="top"><div><span class="tag">Software Factory{version && <span id="version" title="orchestrator version"> v{version}</span>}</span><h1 id="project">{project ?? " "}</h1></div><div class="row"><UserBar me={me} onSignedOut={onSignedOut} /><ConfigDialog providers={providers} /></div></div>
       <div id="error">{error && <><span>{error.message}</span><button onClick={() => setError(null)}>×</button></>}</div>
       <section>
         <CreateDialog agents={agents} unowned={!!me.admin}>

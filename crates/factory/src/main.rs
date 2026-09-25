@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 
 /// CLI for the Software Factory orchestrator.
 #[derive(Parser)]
+#[command(version = api_client::VERSION)]
 struct Cli {
     /// Orchestrator URL
     #[arg(long, env = "FACTORY_URL", global = true, default_value = "http://localhost:8080")]

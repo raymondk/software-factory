@@ -49,6 +49,10 @@ fn number(name: &str, default: usize) -> anyhow::Result<usize> {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V")) {
+        println!("worker {}", api_client::VERSION);
+        return ExitCode::SUCCESS;
+    }
     match run().await {
         Ok(code) => code,
         Err(e) => {
@@ -84,7 +88,7 @@ async fn run() -> anyhow::Result<ExitCode> {
     };
     let log = Log::start(Client::new(&url, &token), id.clone(), shipping);
     let worker = Arc::new(Worker { client: Client::new(&url, &token), id, url, token, workspace, poll_interval, model, log });
-    worker.log.line(format!("worker {} (agent {agent}) starting; workspace {}", worker.id, worker.workspace.display()));
+    worker.log.line(format!("worker {} v{} (agent {agent}) starting; workspace {}", worker.id, api_client::VERSION, worker.workspace.display()));
     let result = match command {
         Some(command) => worker.serve(&CommandAdapter { command }, heartbeat_interval).await,
         None => {

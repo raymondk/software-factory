@@ -132,7 +132,7 @@ function Runs({ ticket: t, run }) {
       {t.runs.length === 0 && <p class="empty">No runs yet</p>}
       {t.runs.map(r => (
         <div key={r.id} class={"run" + (r.id === run ? " selected" : "")}>
-          <a href={`#/tickets/${t.id}/runs/${r.id}`} onClick={r.id === run ? toggle : undefined}>run {r.id}</a><span>{r.worker_id}</span>{r.model && <span class="tag">{r.model}</span>}
+          <a href={`#/tickets/${t.id}/runs/${r.id}`} onClick={r.id === run ? toggle : undefined}>run {r.id}</a><span>{r.worker_id}</span>{r.version && <span class="tag" title="worker version">v{r.version}</span>}{r.model && <span class="tag">{r.model}</span>}
           <span title={r.started_at}>{ago(r.started_at)}</span><span class="tag">{r.ended_at ? "ended" : "running"}</span>
         </div>
       ))}

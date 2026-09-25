@@ -86,7 +86,7 @@ async fn serve_fake(fake: Fake) -> (String, Shared) {
         .route("/status", get(|State(f): State<Shared>| async move {
             let f = f.lock().unwrap();
             let workers = f.running.iter().map(|(w, a)| ProviderWorker { worker_id: w.clone(), agent: a.clone(), status: "running".into() }).collect();
-            Json(Status { capacity: f.capacity, in_use: f.running.len() as u32, agents: f.agents.clone(), workers })
+            Json(Status { version: None, capacity: f.capacity, in_use: f.running.len() as u32, agents: f.agents.clone(), workers })
         }))
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -18,19 +18,23 @@ fn init_logging() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_logging();
-    let path = match std::env::args().nth(1) {
+    let path = match std::env::args().nth(1).as_deref() {
+        Some("--version" | "-V") => {
+            println!("docker-provider {}", api_client::VERSION);
+            return Ok(());
+        }
         Some(p) => PathBuf::from(p),
         None => {
             eprintln!("usage: docker-provider <provider.toml>");
             std::process::exit(2);
         }
     };
+    init_logging();
     let config = Config::load(&path)?;
     let listener = tokio::net::TcpListener::bind(config.provider.listen).await?;
     let state = AppState::recover(config).await?;
     let agents: Vec<&str> = state.config.agents.keys().map(String::as_str).collect();
-    tracing::info!(agents = %agents.join(", "), addr = %listener.local_addr()?, max_workers = state.config.provider.max_workers, "docker provider listening");
+    tracing::info!(version = api_client::VERSION, agents = %agents.join(", "), addr = %listener.local_addr()?, max_workers = state.config.provider.max_workers, "docker provider listening");
     axum::serve(listener, api::router(state)).await?;
     Ok(())
 }

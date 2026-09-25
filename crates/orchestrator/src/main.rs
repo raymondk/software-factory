@@ -19,18 +19,22 @@ fn init_logging() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_logging();
-    let path = match std::env::args().nth(1) {
+    let path = match std::env::args().nth(1).as_deref() {
+        Some("--version" | "-V") => {
+            println!("orchestrator {}", api_client::VERSION);
+            return Ok(());
+        }
         Some(p) => PathBuf::from(p),
         None => {
             eprintln!("usage: orchestrator <config.toml>");
             std::process::exit(2);
         }
     };
+    init_logging();
     let config = Config::load(&path)?;
     let pool = db::open(config.orchestrator.database.as_deref().unwrap()).await?;
     let listener = tokio::net::TcpListener::bind(config.orchestrator.listen).await?;
-    tracing::info!(project = %config.project.name, addr = %listener.local_addr()?, database = %config.orchestrator.database.as_deref().unwrap().display(), "orchestrator listening");
+    tracing::info!(version = api_client::VERSION, project = %config.project.name, addr = %listener.local_addr()?, database = %config.orchestrator.database.as_deref().unwrap().display(), "orchestrator listening");
     let config = Arc::new(config);
     let providers = Arc::new(Providers::new(pool.clone()));
     tokio::spawn(reaper::run(pool.clone(), config.orchestrator.heartbeat_timeout));

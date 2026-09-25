@@ -1,6 +1,6 @@
 use api_client::{
     Breakdown, Comment, CreateComment, CreateRelation, CreateTicket, CreateWorker, ListTickets, LogLine, LogsAfter, Metrics, MoveTicket, NewWorker, PollRequest,
-    ModelKey, PollResponse, Relation, ReportUsage, Run, ShipLogs, Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, AgentKey,
+    ModelKey, PollResponse, Relation, ReportUsage, Run, ShipLogs, Ticket, TicketKey, Totals, UpdateTicket, Usage, Worker, WorkerKey, AgentKey, RegisterWorker,
 };
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
@@ -53,6 +53,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(ui))
         .route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT }))
+        .route("/version", get(version))
         .route("/auth/challenge", get(crate::auth::challenge))
         .route("/auth/login", post(crate::auth::login))
         .merge(api)
@@ -329,6 +330,7 @@ async fn full_ticket(state: &AppState, id: i64) -> Result<Ticket, ApiError> {
         .into_iter()
         .map(|r| Run {
             agent: r.agent,
+            version: r.version,
             model: r.model,
             id: r.id,
             ticket_id: r.ticket_id,
@@ -346,12 +348,13 @@ struct RunRow {
     ticket_id: i64,
     worker_id: String,
     agent: String,
+    version: Option<String>,
     model: Option<String>,
     started_at: String,
     ended_at: Option<String>,
 }
 
-const RUN_COLUMNS: &str = "r.id, r.ticket_id, r.worker_id, w.agent, r.model, r.started_at, r.ended_at";
+const RUN_COLUMNS: &str = "r.id, r.ticket_id, r.worker_id, w.agent, w.version, r.model, r.started_at, r.ended_at";
 
 async fn comments_of(state: &AppState, ticket_id: i64) -> Result<Vec<Comment>, ApiError> {
     let rows: Vec<CommentRow> =
@@ -660,6 +663,7 @@ async fn move_ticket(
 struct WorkerRow {
     id: String,
     agent: String,
+    version: Option<String>,
     provider: i64,
     status: String,
     created_at: String,
@@ -669,12 +673,12 @@ struct WorkerRow {
 
 impl From<WorkerRow> for Worker {
     fn from(r: WorkerRow) -> Worker {
-        Worker { id: r.id, agent: r.agent, provider: r.provider, status: r.status, created_at: r.created_at, last_heartbeat: r.last_heartbeat, ticket: r.ticket }
+        Worker { id: r.id, agent: r.agent, version: r.version, provider: r.provider, status: r.status, created_at: r.created_at, last_heartbeat: r.last_heartbeat, ticket: r.ticket }
     }
 }
 
 /// Worker columns for the API: everything but the token, plus the ticket it holds.
-const WORKER_COLUMNS: &str = "id, agent, provider, status, created_at, last_heartbeat, \
+const WORKER_COLUMNS: &str = "id, agent, version, provider, status, created_at, last_heartbeat, \
     (SELECT t.id FROM tickets t WHERE t.assignee = workers.id ORDER BY t.rank ASC, t.id ASC LIMIT 1) AS ticket";
 
 /// Creates a worker record with a fresh id and token, to run `agent` on `provider`. Also used by the scheduler.
@@ -734,10 +738,18 @@ async fn set_status(db: impl SqliteExecutor<'_>, id: &str, status: &str) -> Resu
     row.map(Worker::from).ok_or(ApiError::Unauthorized)
 }
 
-async fn register(State(state): State<AppState>, Extension(caller): Extension<Caller>, Path(id): Path<String>) -> Result<Json<Worker>, ApiError> {
+/// The body is optional: a worker from before versions were reported sends none.
+async fn register(
+    State(state): State<AppState>,
+    Extension(caller): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Option<Json<RegisterWorker>>,
+) -> Result<Json<Worker>, ApiError> {
     caller.require_worker(&id)?;
+    let version = body.map(|Json(b)| b.version);
+    sqlx::query("UPDATE workers SET version = ?2 WHERE id = ?1").bind(&id).bind(&version).execute(&state.pool).await?;
     let worker = set_status(&state.pool, &id, "idle").await?;
-    info!(worker = %id, agent = %worker.agent, provider = worker.provider, "worker registered");
+    info!(worker = %id, agent = %worker.agent, version = version.as_deref().unwrap_or("?"), provider = worker.provider, "worker registered");
     Ok(Json(worker))
 }
 
@@ -982,9 +994,16 @@ where
     Ok(rows.into_iter().map(|r| Breakdown { key: into(r.key), totals: r.totals.into() }).collect())
 }
 
-/// Spec 4.2: the running configuration, read-only, without the token.
-async fn config(State(state): State<AppState>) -> Json<std::sync::Arc<Config>> {
-    Json(state.config.clone())
+/// Spec 4.2: the running configuration, read-only, without the token, plus the orchestrator's version.
+async fn config(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let mut config = serde_json::to_value(&*state.config).unwrap();
+    config["version"] = api_client::VERSION.into();
+    Json(config)
+}
+
+/// Open: the orchestrator's version.
+async fn version() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "version": api_client::VERSION }))
 }
 
 /// Spec 4.2: what the caller's own providers advertise (a worker's: its user's), for the UI to offer when setting

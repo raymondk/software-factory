@@ -861,6 +861,7 @@ name = "docker-provider"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "api-client",
  "axum",
  "reqwest 0.12.28",
  "serde",

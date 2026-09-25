@@ -25,7 +25,7 @@ pub fn advertised() -> BTreeMap<String, AgentInfo> {
 }
 
 pub fn status(agents: BTreeMap<String, AgentInfo>) -> Status {
-    Status { capacity: 4, in_use: 0, agents, workers: vec![] }
+    Status { version: None, capacity: 4, in_use: 0, agents, workers: vec![] }
 }
 
 /// Serves the API on a random port with a fresh database. `config` is TOML; its token is replaced by `TOKEN`. Two

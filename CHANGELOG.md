@@ -27,6 +27,10 @@ push the tag. The release workflow takes that version's section as the release n
 - Release workflow: pushing a tag `vX.Y.Z` builds the binaries for linux x86_64 and aarch64, attaches them to a GitHub
   release with this changelog's section as notes, and publishes the worker image to `ghcr.io/raymondk/software-factory/worker`.
 
+- Every binary prints its version with `--version`. The orchestrator serves `GET /version` and includes it in `GET /config`;
+  the UI shows it in the header and under the cog. Providers report theirs in `GET /status` and workers when they register,
+  both shown on the board and on runs.
+
 ### Changed
 
 - The worker image copies prebuilt `worker` and `factory` binaries instead of compiling from source;

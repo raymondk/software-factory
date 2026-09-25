@@ -72,6 +72,8 @@ pub struct Agent {
 
 #[derive(Debug, Serialize)]
 pub struct Status {
+    /// This provider binary's version.
+    pub version: &'static str,
     pub capacity: u32,
     pub in_use: u32,
     pub agents: BTreeMap<String, Agent>,
@@ -175,5 +177,5 @@ async fn status(State(state): State<AppState>) -> Result<Json<Status>, ApiError>
     let mut workers = state.workers.lock().await;
     let workers = reconcile(&mut workers).await?;
     let agents = state.config.agents.iter().map(|(n, a)| (n.clone(), Agent { models: a.models.clone(), default_model: a.default_model.clone() })).collect();
-    Ok(Json(Status { capacity: state.config.provider.max_workers, in_use: in_use(&workers), agents, workers }))
+    Ok(Json(Status { version: api_client::VERSION, capacity: state.config.provider.max_workers, in_use: in_use(&workers), agents, workers }))
 }

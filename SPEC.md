@@ -124,7 +124,7 @@ Tickets:
 - `DELETE /tickets/{id}/relations/{type}/{ticket}`
 
 Workers:
-- `POST /workers/{id}/register`: worker confirms it is alive. The id and token were assigned by the orchestrator before start.
+- `POST /workers/{id}/register` body `{ version }` (optional): worker confirms it is alive and reports its binary's version, shown on the worker and its runs. The id and token were assigned by the orchestrator before start.
 - `POST /workers/{id}/heartbeat`
 - `POST /workers/{id}/poll`: returns the lowest-ranked available, unblocked ticket owned by this worker's user whose `agent` is unset or matches this worker's, and whose `model` is unset or supported by this worker's provider, with the prompt for its current state, the ticket's `model` (may be null), the project's repos, and the id of the run it opens, or nothing. Sets assignee atomically. An optional body `{"exclude": <ticket id>}` (the ticket the worker just timed out on) makes that ticket last in line: it is returned only when nothing else is available.
 - `POST /workers/{id}/usage`: report token and cost usage for a ticket, and the model the agent ran with. Ends the worker's open run and records the model on it.
@@ -132,7 +132,8 @@ Workers:
 - `GET /workers/{id}/logs?after=<line id>`: the worker's whole stream, oldest first, at most 1000 lines per call.
 - `GET /runs/{id}/logs?after=<line id>`: one run's lines, same shape. `after` supports polling for live output.
 - `GET /workers`: list workers with their agent, provider and status.
-- `GET /config`: the running configuration, read-only, without the token. Shown in the UI.
+- `GET /config`: the running configuration, read-only, without the token, plus the orchestrator's `version`. Shown in the UI.
+- `GET /version`: `{ version }`, open. Every binary also prints its version with `--version`: the crate version, plus `+<commit>` when built off a tag or with local changes.
 - `GET /agents`: the agents the caller's providers advertised in their last status (a worker's: its user's), each with the union of the models advertised for it. What the UI offers when setting agent and model on a ticket.
 
 Providers (5):
@@ -201,7 +202,7 @@ REST API the orchestrator calls. `POST` and `DELETE` require the provider's toke
 
 - `POST /workers`: body `{ worker_id, agent, orchestrator_url, worker_token }`. Starts a worker of that agent; 400 for an agent the provider does not advertise. The provider maps `worker_id` to its own handle (container id, pod name) internally.
 - `DELETE /workers/{id}`: stops a worker.
-- `GET /status`: returns the list of workers the provider believes are running with their agent and status, plus provider-level information: total capacity (maximum workers it can run), capacity in use, the advertised agents with their models and default, and anything provider-specific.
+- `GET /status`: returns the list of workers the provider believes are running with their agent and status, plus provider-level information: the provider's `version`, total capacity (maximum workers it can run), capacity in use, the advertised agents with their models and default, and anything provider-specific.
 
 The provider starts a worker with these environment variables: orchestrator URL, worker id, worker token, agent, the agent's default model, and the credentials it is configured with (git token, agent credentials). The provider knows nothing about tickets or repos.
 
